@@ -15,9 +15,7 @@ SCRIPTS_FIRST = \
 SCRIPTS_ALL = \
 	test3.out \
 	test14.out \
-	test15.out \
 	test29.out \
-	test36.out \
 	test37.out \
 	test39.out \
 	test42.out \
@@ -57,7 +55,7 @@ SCRIPTS_MORE4 = \
 
 
 # Tests specifically for MS-Windows.
-SCRIPTS_WIN32 = test50.out
+SCRIPTS_WIN32 =
 
 
 # Tests for the GUI.
@@ -74,9 +72,11 @@ NEW_TESTS = test_arabic.res \
 	    test_autocmd.res \
 	    test_autoload.res \
 	    test_backspace_opt.res \
+	    test_blockedit.res \
 	    test_breakindent.res \
 	    test_bufwintabinfo.res \
 	    test_cdo.res \
+	    test_changelist.res \
 	    test_channel.res \
 	    test_charsearch.res \
 	    test_cindent.res \
@@ -98,6 +98,7 @@ NEW_TESTS = test_arabic.res \
 	    test_exec_while_if.res \
 	    test_exists.res \
 	    test_exists_autocmd.res \
+	    test_exit.res \
 	    test_farsi.res \
 	    test_file_size.res \
 	    test_find_complete.res \
@@ -122,6 +123,7 @@ NEW_TESTS = test_arabic.res \
 	    test_ins_complete.res \
 	    test_job_fails.res \
 	    test_json.res \
+	    test_jumplist.res \
 	    test_langmap.res \
 	    test_let.res \
 	    test_lineending.res \
@@ -158,6 +160,7 @@ NEW_TESTS = test_arabic.res \
 	    test_ruby.res \
 	    test_scrollbind.res \
 	    test_search.res \
+	    test_shortpathname.res \
 	    test_signs.res \
 	    test_smartindent.res \
 	    test_spell.res \
@@ -185,6 +188,7 @@ NEW_TESTS = test_arabic.res \
 	    test_windows_home.res \
 	    test_wordcount.res \
 	    test_writefile.res \
+	    test_xxd.res \
 	    test_alot_latin.res \
 	    test_alot_utf8.res \
 	    test_alot.res

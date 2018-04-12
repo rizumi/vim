@@ -1099,10 +1099,8 @@ free_all_mem(void)
 	return;
     entered_free_all_mem = TRUE;
 
-# ifdef FEAT_AUTOCMD
     /* Don't want to trigger autocommands from here on. */
     block_autocmds();
-# endif
 
     /* Close all tabs and windows.  Reset 'equalalways' to avoid redraws. */
     p_ea = FALSE;
@@ -1114,6 +1112,10 @@ free_all_mem(void)
 # if defined(FEAT_SPELL)
     /* Free all spell info. */
     spell_free_all();
+# endif
+
+#if defined(FEAT_INS_EXPAND) && defined(FEAT_BEVAL_TERM)
+    ui_remove_balloon();
 # endif
 
 # if defined(FEAT_USR_CMDS)
@@ -1153,9 +1155,7 @@ free_all_mem(void)
 # endif
 
     /* Obviously named calls. */
-# if defined(FEAT_AUTOCMD)
     free_all_autocmds();
-# endif
     clear_termcodes();
     free_all_marks();
     alist_clear(&global_alist);
@@ -1823,6 +1823,8 @@ copy_option_part(
  * Replacement for free() that ignores NULL pointers.
  * Also skip free() when exiting for sure, this helps when we caught a deadly
  * signal that was caused by a crash in free().
+ * If you want to set NULL after calling this function, you should use
+ * VIM_CLEAR() instead.
  */
     void
 vim_free(void *x)
@@ -3159,7 +3161,7 @@ get_fileformat_force(
     int		c;
 
     if (eap != NULL && eap->force_ff != 0)
-	c = eap->cmd[eap->force_ff];
+	c = eap->force_ff;
     else
     {
 	if ((eap != NULL && eap->force_bin != 0)
@@ -3389,13 +3391,18 @@ same_directory(char_u *f1, char_u *f2)
  * Return OK or FAIL.
  */
     int
-vim_chdirfile(char_u *fname)
+vim_chdirfile(char_u *fname, char *trigger_autocmd UNUSED)
 {
     char_u	dir[MAXPATHL];
+    int		res;
 
     vim_strncpy(dir, fname, MAXPATHL - 1);
     *gettail_sep(dir) = NUL;
-    return mch_chdir((char *)dir) == 0 ? OK : FAIL;
+    res = mch_chdir((char *)dir) == 0 ? OK : FAIL;
+    if (res == OK && trigger_autocmd != NULL)
+	apply_autocmds(EVENT_DIRCHANGED, (char_u *)trigger_autocmd,
+							   dir, FALSE, curbuf);
+    return res;
 }
 #endif
 
@@ -5166,8 +5173,8 @@ ff_wc_equal(char_u *s1, char_u *s2)
 	prev2 = prev1;
 	prev1 = c1;
 
-        i += MB_PTR2LEN(s1 + i);
-        j += MB_PTR2LEN(s2 + j);
+	i += MB_PTR2LEN(s1 + i);
+	j += MB_PTR2LEN(s2 + j);
     }
     return s1[i] == s2[j];
 }
@@ -5885,7 +5892,7 @@ pathcmp(const char *p, const char *q, int maxlen)
 	    if (c2 == NUL)  /* full match */
 		return 0;
 	    s = q;
-            i = j;
+	    i = j;
 	    break;
 	}
 
@@ -6141,59 +6148,83 @@ filewritable(char_u *fname)
 #if defined(FEAT_SPELL) || defined(FEAT_PERSISTENT_UNDO) || defined(PROTO)
 /*
  * Read 2 bytes from "fd" and turn them into an int, MSB first.
+ * Returns -1 when encountering EOF.
  */
     int
 get2c(FILE *fd)
 {
-    int		n;
+    int		c, n;
 
     n = getc(fd);
-    n = (n << 8) + getc(fd);
-    return n;
+    if (n == EOF) return -1;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    return (n << 8) + c;
 }
 
 /*
  * Read 3 bytes from "fd" and turn them into an int, MSB first.
+ * Returns -1 when encountering EOF.
  */
     int
 get3c(FILE *fd)
 {
-    int		n;
+    int		c, n;
 
     n = getc(fd);
-    n = (n << 8) + getc(fd);
-    n = (n << 8) + getc(fd);
-    return n;
+    if (n == EOF) return -1;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    n = (n << 8) + c;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    return (n << 8) + c;
 }
 
 /*
  * Read 4 bytes from "fd" and turn them into an int, MSB first.
+ * Returns -1 when encountering EOF.
  */
     int
 get4c(FILE *fd)
 {
+    int		c;
     /* Use unsigned rather than int otherwise result is undefined
      * when left-shift sets the MSB. */
     unsigned	n;
 
-    n = (unsigned)getc(fd);
-    n = (n << 8) + (unsigned)getc(fd);
-    n = (n << 8) + (unsigned)getc(fd);
-    n = (n << 8) + (unsigned)getc(fd);
+    c = getc(fd);
+    if (c == EOF) return -1;
+    n = (unsigned)c;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    n = (n << 8) + (unsigned)c;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    n = (n << 8) + (unsigned)c;
+    c = getc(fd);
+    if (c == EOF) return -1;
+    n = (n << 8) + (unsigned)c;
     return (int)n;
 }
 
 /*
  * Read 8 bytes from "fd" and turn them into a time_T, MSB first.
+ * Returns -1 when encountering EOF.
  */
     time_T
 get8ctime(FILE *fd)
 {
+    int		c;
     time_T	n = 0;
     int		i;
 
     for (i = 0; i < 8; ++i)
-	n = (n << 8) + getc(fd);
+    {
+	c = getc(fd);
+	if (c == EOF) return -1;
+	n = (n << 8) + c;
+    }
     return n;
 }
 

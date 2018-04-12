@@ -133,29 +133,22 @@ struct efm_S
 static efm_T	*fmt_start = NULL; /* cached across qf_parse_line() calls */
 
 static int	qf_init_ext(qf_info_T *qi, int qf_idx, char_u *efile, buf_T *buf, typval_T *tv, char_u *errorformat, int newlist, linenr_T lnumfirst, linenr_T lnumlast, char_u *qf_title, char_u *enc);
-static void	qf_store_title(qf_info_T *qi, int qf_idx, char_u *title);
 static void	qf_new_list(qf_info_T *qi, char_u *qf_title);
-static void	ll_free_all(qf_info_T **pqi);
 static int	qf_add_entry(qf_info_T *qi, int qf_idx, char_u *dir, char_u *fname, int bufnum, char_u *mesg, long lnum, int col, int vis_col, char_u *pattern, int nr, int type, int valid);
-static qf_info_T *ll_new_list(void);
 static void	qf_free(qf_info_T *qi, int idx);
 static char_u	*qf_types(int, int);
 static int	qf_get_fnum(qf_info_T *qi, int qf_idx, char_u *, char_u *);
 static char_u	*qf_push_dir(char_u *, struct dir_stack_T **, int is_file_stack);
 static char_u	*qf_pop_dir(struct dir_stack_T **);
 static char_u	*qf_guess_filepath(qf_info_T *qi, int qf_idx, char_u *);
-static int	qflist_valid(win_T *wp, int_u qf_id);
 static void	qf_fmt_text(char_u *text, char_u *buf, int bufsize);
-static void	qf_clean_dir_stack(struct dir_stack_T **);
 static int	qf_win_pos_update(qf_info_T *qi, int old_qf_index);
-static int	is_qf_win(win_T *win, qf_info_T *qi);
 static win_T	*qf_find_win(qf_info_T *qi);
 static buf_T	*qf_find_buf(qf_info_T *qi);
 static void	qf_update_buffer(qf_info_T *qi, qfline_T *old_last);
 static void	qf_set_title_var(qf_info_T *qi);
 static void	qf_fill_buffer(qf_info_T *qi, buf_T *buf, qfline_T *old_last);
 static char_u	*get_mef_name(void);
-static void	restore_start_dir(char_u *dirname_start);
 static buf_T	*load_dummy_buffer(char_u *fname, char_u *dirname_start, char_u *resulting_dir);
 static void	wipe_dummy_buffer(buf_T *buf, char_u *dirname_start);
 static void	unload_dummy_buffer(buf_T *buf, char_u *dirname_start);
@@ -851,6 +844,7 @@ qf_parse_line(
     /* Always ignore case when looking for a matching error. */
     regmatch.rm_ic = TRUE;
 
+restofline:
     /* If there was no %> item start at the first pattern */
     if (fmt_start == NULL)
 	fmt_ptr = fmt_first;
@@ -865,7 +859,6 @@ qf_parse_line(
      * match or no match.
      */
     fields->valid = TRUE;
-restofline:
     for ( ; fmt_ptr != NULL; fmt_ptr = fmt_ptr->next)
     {
 	int r;
@@ -1177,8 +1170,7 @@ qf_init_ext(
     int		    status;
 
     /* Do not used the cached buffer, it may have been wiped out. */
-    vim_free(qf_last_bufname);
-    qf_last_bufname = NULL;
+    VIM_CLEAR(qf_last_bufname);
 
     vim_memset(&state, 0, sizeof(state));
     vim_memset(&fields, 0, sizeof(fields));
@@ -1229,8 +1221,7 @@ qf_init_ext(
     if (last_efm == NULL || (STRCMP(last_efm, efm) != 0))
     {
 	/* free the previously parsed data */
-	vim_free(last_efm);
-	last_efm = NULL;
+	VIM_CLEAR(last_efm);
 	free_efm_list(&fmt_first);
 
 	/* parse the current 'efm' */
@@ -1351,8 +1342,7 @@ qf_init_end:
     static void
 qf_store_title(qf_info_T *qi, int qf_idx, char_u *title)
 {
-    vim_free(qi->qf_lists[qf_idx].qf_title);
-    qi->qf_lists[qf_idx].qf_title = NULL;
+    VIM_CLEAR(qi->qf_lists[qf_idx].qf_title);
 
     if (title != NULL)
     {
@@ -3003,8 +2993,7 @@ qf_free(qf_info_T *qi, int idx)
 
     qf_free_items(qi, idx);
 
-    vim_free(qfl->qf_title);
-    qfl->qf_title = NULL;
+    VIM_CLEAR(qfl->qf_title);
     free_tv(qfl->qf_ctx);
     qfl->qf_ctx = NULL;
     qfl->qf_id = 0;
@@ -3630,13 +3619,10 @@ qf_fill_buffer(qf_info_T *qi, buf_T *buf, qfline_T *old_last)
 	/* Set the 'filetype' to "qf" each time after filling the buffer.
 	 * This resembles reading a file into a buffer, it's more logical when
 	 * using autocommands. */
-#ifdef FEAT_AUTOCMD
 	++curbuf_lock;
-#endif
 	set_option_value((char_u *)"ft", 0L, (char_u *)"qf", OPT_LOCAL);
 	curbuf->b_p_ma = FALSE;
 
-#ifdef FEAT_AUTOCMD
 	keep_filetype = TRUE;		/* don't detect 'filetype' */
 	apply_autocmds(EVENT_BUFREADPOST, (char_u *)"quickfix", NULL,
 							       FALSE, curbuf);
@@ -3644,7 +3630,7 @@ qf_fill_buffer(qf_info_T *qi, buf_T *buf, qfline_T *old_last)
 							       FALSE, curbuf);
 	keep_filetype = FALSE;
 	--curbuf_lock;
-#endif
+
 	/* make sure it will be redrawn */
 	redraw_curbuf_later(NOT_VALID);
     }
@@ -3686,7 +3672,6 @@ ex_make(exarg_T *eap)
     win_T	*wp = NULL;
     qf_info_T	*qi = &ql_info;
     int		res;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name = NULL;
 
     /* Redirect ":grep" to ":vimgrep" if 'grepprg' is "internal". */
@@ -3709,12 +3694,11 @@ ex_make(exarg_T *eap)
     if (au_name != NULL && apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name,
 					       curbuf->b_fname, TRUE, curbuf))
     {
-# ifdef FEAT_EVAL
+#ifdef FEAT_EVAL
 	if (aborting())
 	    return;
-# endif
-    }
 #endif
+    }
 #ifdef FEAT_MBYTE
     enc = (*curbuf->b_p_menc != NUL) ? curbuf->b_p_menc : p_menc;
 #endif
@@ -3770,17 +3754,15 @@ ex_make(exarg_T *eap)
 	qi = GET_LOC_LIST(wp);
     if (res >= 0 && qi != NULL)
 	qf_list_changed(qi, qi->qf_curlist);
-#ifdef FEAT_AUTOCMD
     if (au_name != NULL)
     {
 	apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name,
 					       curbuf->b_fname, TRUE, curbuf);
-	if (qi->qf_curlist < qi->qf_listcount)
+	if (qi != NULL && qi->qf_curlist < qi->qf_listcount)
 	    res = qi->qf_lists[qi->qf_curlist].qf_count;
 	else
 	    res = 0;
     }
-#endif
     if (res > 0 && !eap->forceit)
 	qf_jump(qi, 0, 0, FALSE);		/* display first error */
 
@@ -4109,13 +4091,10 @@ ex_cfile(exarg_T *eap)
     char_u	*enc = NULL;
     win_T	*wp = NULL;
     qf_info_T	*qi = &ql_info;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name = NULL;
-    int		save_qfid;
-#endif
+    int		save_qfid = 0;  /* init for gcc */
     int		res;
 
-#ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
 	case CMD_cfile:	    au_name = (char_u *)"cfile"; break;
@@ -4128,7 +4107,6 @@ ex_cfile(exarg_T *eap)
     }
     if (au_name != NULL)
 	apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name, NULL, FALSE, curbuf);
-#endif
 #ifdef FEAT_MBYTE
     enc = (*curbuf->b_p_menc != NUL) ? curbuf->b_p_menc : p_menc;
 #endif
@@ -4168,20 +4146,270 @@ ex_cfile(exarg_T *eap)
 	qi = GET_LOC_LIST(wp);
     if (res >= 0 && qi != NULL)
 	qf_list_changed(qi, qi->qf_curlist);
-#ifdef FEAT_AUTOCMD
-    save_qfid = qi->qf_lists[qi->qf_curlist].qf_id;
+    if (qi != NULL)
+	save_qfid = qi->qf_lists[qi->qf_curlist].qf_id;
     if (au_name != NULL)
 	apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name, NULL, FALSE, curbuf);
-    /*
-     * Autocmd might have freed the quickfix/location list. Check whether it is
-     * still valid
-     */
-    if (!qflist_valid(wp, save_qfid))
+
+    /* An autocmd might have freed the quickfix/location list. Check whether it
+     * is still valid. */
+    if (qi != NULL && !qflist_valid(wp, save_qfid))
 	return;
-#endif
     if (res > 0 && (eap->cmdidx == CMD_cfile || eap->cmdidx == CMD_lfile))
-    {
 	qf_jump(qi, 0, 0, eap->forceit);	/* display first error */
+}
+
+/*
+ * Return the quickfix/location list number with the given identifier.
+ * Returns -1 if list is not found.
+ */
+    static int
+qf_id2nr(qf_info_T *qi, int_u qfid)
+{
+    int		qf_idx;
+
+    for (qf_idx = 0; qf_idx < qi->qf_listcount; qf_idx++)
+	if (qi->qf_lists[qf_idx].qf_id == qfid)
+	    return qf_idx;
+    return -1;
+}
+
+/*
+ * Return the vimgrep autocmd name.
+ */
+    static char_u *
+vgr_get_auname(cmdidx_T cmdidx)
+{
+    switch (cmdidx)
+    {
+	case CMD_vimgrep:     return (char_u *)"vimgrep";
+	case CMD_lvimgrep:    return (char_u *)"lvimgrep";
+	case CMD_vimgrepadd:  return (char_u *)"vimgrepadd";
+	case CMD_lvimgrepadd: return (char_u *)"lvimgrepadd";
+	case CMD_grep:	      return (char_u *)"grep";
+	case CMD_lgrep:	      return (char_u *)"lgrep";
+	case CMD_grepadd:     return (char_u *)"grepadd";
+	case CMD_lgrepadd:    return (char_u *)"lgrepadd";
+	default: return NULL;
+    }
+}
+
+/*
+ * Initialize the regmatch used by vimgrep for pattern "s".
+ */
+    static void
+vgr_init_regmatch(regmmatch_T *regmatch, char_u *s)
+{
+    /* Get the search pattern: either white-separated or enclosed in // */
+    regmatch->regprog = NULL;
+
+    if (s == NULL || *s == NUL)
+    {
+	/* Pattern is empty, use last search pattern. */
+	if (last_search_pat() == NULL)
+	{
+	    EMSG(_(e_noprevre));
+	    return;
+	}
+	regmatch->regprog = vim_regcomp(last_search_pat(), RE_MAGIC);
+    }
+    else
+	regmatch->regprog = vim_regcomp(s, RE_MAGIC);
+
+    regmatch->rmm_ic = p_ic;
+    regmatch->rmm_maxcol = 0;
+}
+
+/*
+ * Display a file name when vimgrep is running.
+ */
+    static void
+vgr_display_fname(char_u *fname)
+{
+    char_u	*p;
+
+    msg_start();
+    p = msg_strtrunc(fname, TRUE);
+    if (p == NULL)
+	msg_outtrans(fname);
+    else
+    {
+	msg_outtrans(p);
+	vim_free(p);
+    }
+    msg_clr_eos();
+    msg_didout = FALSE;	    /* overwrite this message */
+    msg_nowait = TRUE;	    /* don't wait for this message */
+    msg_col = 0;
+    out_flush();
+}
+
+/*
+ * Load a dummy buffer to search for a pattern using vimgrep.
+ */
+    static buf_T *
+vgr_load_dummy_buf(
+	char_u *fname,
+	char_u *dirname_start,
+	char_u *dirname_now)
+{
+    int		save_mls;
+#if defined(FEAT_SYN_HL)
+    char_u	*save_ei = NULL;
+#endif
+    buf_T	*buf;
+
+#if defined(FEAT_SYN_HL)
+    /* Don't do Filetype autocommands to avoid loading syntax and
+     * indent scripts, a great speed improvement. */
+    save_ei = au_event_disable(",Filetype");
+#endif
+    /* Don't use modelines here, it's useless. */
+    save_mls = p_mls;
+    p_mls = 0;
+
+    /* Load file into a buffer, so that 'fileencoding' is detected,
+     * autocommands applied, etc. */
+    buf = load_dummy_buffer(fname, dirname_start, dirname_now);
+
+    p_mls = save_mls;
+#if defined(FEAT_SYN_HL)
+    au_event_restore(save_ei);
+#endif
+
+    return buf;
+}
+
+/*
+ * Check whether a quickfix/location list valid. Autocmds may remove or change
+ * a quickfix list when vimgrep is running. If the list is not found, create a
+ * new list.
+ */
+    static int
+vgr_qflist_valid(
+	win_T	    *wp,
+	qf_info_T   *qi,
+	int_u	    qfid,
+	char_u	    *title)
+{
+    /* Verify that the quickfix/location list was not freed by an autocmd */
+    if (!qflist_valid(wp, qfid))
+    {
+	if (wp != NULL)
+	{
+	    /* An autocmd has freed the location list. */
+	    EMSG(_(e_loc_list_changed));
+	    return FALSE;
+	}
+	else
+	{
+	    /* Quickfix list is not found, create a new one. */
+	    qf_new_list(qi, title);
+	    return TRUE;
+	}
+    }
+
+    if (qi->qf_lists[qi->qf_curlist].qf_id != qfid)
+	/* Autocommands changed the quickfix list.  Find the one we were
+	 * using and restore it. */
+	qi->qf_curlist = qf_id2nr(qi, qfid);
+
+    return TRUE;
+}
+
+/*
+ * Search for a pattern in all the lines in a buffer and add the matching lines
+ * to a quickfix list.
+ */
+    static int
+vgr_match_buflines(
+	qf_info_T   *qi,
+	char_u	    *fname,
+	buf_T	    *buf,
+	regmmatch_T *regmatch,
+	long	    tomatch,
+	int	    duplicate_name,
+	int	    flags)
+{
+    int		found_match = FALSE;
+    long	lnum;
+    colnr_T	col;
+
+    for (lnum = 1; lnum <= buf->b_ml.ml_line_count && tomatch > 0; ++lnum)
+    {
+	col = 0;
+	while (vim_regexec_multi(regmatch, curwin, buf, lnum,
+		    col, NULL, NULL) > 0)
+	{
+	    /* Pass the buffer number so that it gets used even for a
+	     * dummy buffer, unless duplicate_name is set, then the
+	     * buffer will be wiped out below. */
+	    if (qf_add_entry(qi,
+			qi->qf_curlist,
+			NULL,       /* dir */
+			fname,
+			duplicate_name ? 0 : buf->b_fnum,
+			ml_get_buf(buf,
+			    regmatch->startpos[0].lnum + lnum, FALSE),
+			regmatch->startpos[0].lnum + lnum,
+			regmatch->startpos[0].col + 1,
+			FALSE,      /* vis_col */
+			NULL,	    /* search pattern */
+			0,	    /* nr */
+			0,	    /* type */
+			TRUE	    /* valid */
+			) == FAIL)
+	    {
+		got_int = TRUE;
+		break;
+	    }
+	    found_match = TRUE;
+	    if (--tomatch == 0)
+		break;
+	    if ((flags & VGR_GLOBAL) == 0
+		    || regmatch->endpos[0].lnum > 0)
+		break;
+	    col = regmatch->endpos[0].col
+		+ (col == regmatch->endpos[0].col);
+	    if (col > (colnr_T)STRLEN(ml_get_buf(buf, lnum, FALSE)))
+		break;
+	}
+	line_breakcheck();
+	if (got_int)
+	    break;
+    }
+
+    return found_match;
+}
+
+/*
+ * Jump to the first match and update the directory.
+ */
+    static void
+vgr_jump_to_match(
+	qf_info_T   *qi,
+	int	    forceit,
+	int	    *redraw_for_dummy,
+	buf_T	    *first_match_buf,
+	char_u	    *target_dir)
+{
+    buf_T	*buf;
+
+    buf = curbuf;
+    qf_jump(qi, 0, 0, forceit);
+    if (buf != curbuf)
+	/* If we jumped to another buffer redrawing will already be
+	 * taken care of. */
+	*redraw_for_dummy = FALSE;
+
+    /* Jump to the directory used after loading the buffer. */
+    if (curbuf == first_match_buf && target_dir != NULL)
+    {
+	exarg_T ea;
+
+	ea.arg = target_dir;
+	ea.cmdidx = CMD_lcd;
+	ex_cd(&ea);
     }
 }
 
@@ -4203,13 +4431,8 @@ ex_vimgrep(exarg_T *eap)
     char_u	*p;
     int		fi;
     qf_info_T	*qi = &ql_info;
-    int		loclist_cmd = FALSE;
-#ifdef FEAT_AUTOCMD
     int_u	save_qfid;
-    qfline_T	*cur_qf_start;
-    win_T	*wp;
-#endif
-    long	lnum;
+    win_T	*wp = NULL;
     buf_T	*buf;
     int		duplicate_name = FALSE;
     int		using_dummy;
@@ -4217,41 +4440,23 @@ ex_vimgrep(exarg_T *eap)
     int		found_match;
     buf_T	*first_match_buf = NULL;
     time_t	seconds = 0;
-    int		save_mls;
-#if defined(FEAT_AUTOCMD) && defined(FEAT_SYN_HL)
-    char_u	*save_ei = NULL;
-#endif
     aco_save_T	aco;
     int		flags = 0;
-    colnr_T	col;
     long	tomatch;
     char_u	*dirname_start = NULL;
     char_u	*dirname_now = NULL;
     char_u	*target_dir = NULL;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name =  NULL;
 
-    switch (eap->cmdidx)
-    {
-	case CMD_vimgrep:     au_name = (char_u *)"vimgrep"; break;
-	case CMD_lvimgrep:    au_name = (char_u *)"lvimgrep"; break;
-	case CMD_vimgrepadd:  au_name = (char_u *)"vimgrepadd"; break;
-	case CMD_lvimgrepadd: au_name = (char_u *)"lvimgrepadd"; break;
-	case CMD_grep:	      au_name = (char_u *)"grep"; break;
-	case CMD_lgrep:	      au_name = (char_u *)"lgrep"; break;
-	case CMD_grepadd:     au_name = (char_u *)"grepadd"; break;
-	case CMD_lgrepadd:    au_name = (char_u *)"lgrepadd"; break;
-	default: break;
-    }
+    au_name = vgr_get_auname(eap->cmdidx);
     if (au_name != NULL && apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name,
 					       curbuf->b_fname, TRUE, curbuf))
     {
-# ifdef FEAT_EVAL
+#ifdef FEAT_EVAL
 	if (aborting())
 	    return;
-# endif
-    }
 #endif
+    }
 
     if (eap->cmdidx == CMD_lgrep
 	    || eap->cmdidx == CMD_lvimgrep
@@ -4261,7 +4466,7 @@ ex_vimgrep(exarg_T *eap)
 	qi = ll_get_or_alloc_list(curwin);
 	if (qi == NULL)
 	    return;
-	loclist_cmd = TRUE;
+	wp = curwin;
     }
 
     if (eap->addr_count > 0)
@@ -4279,23 +4484,9 @@ ex_vimgrep(exarg_T *eap)
 	goto theend;
     }
 
-    if (s != NULL && *s == NUL)
-    {
-	/* Pattern is empty, use last search pattern. */
-	if (last_search_pat() == NULL)
-	{
-	    EMSG(_(e_noprevre));
-	    goto theend;
-	}
-	regmatch.regprog = vim_regcomp(last_search_pat(), RE_MAGIC);
-    }
-    else
-	regmatch.regprog = vim_regcomp(s, RE_MAGIC);
-
+    vgr_init_regmatch(&regmatch, s);
     if (regmatch.regprog == NULL)
 	goto theend;
-    regmatch.rmm_ic = p_ic;
-    regmatch.rmm_maxcol = 0;
 
     p = skipwhite(p);
     if (*p == NUL)
@@ -4305,7 +4496,8 @@ ex_vimgrep(exarg_T *eap)
     }
 
     if ((eap->cmdidx != CMD_grepadd && eap->cmdidx != CMD_lgrepadd
-		&& eap->cmdidx != CMD_vimgrepadd && eap->cmdidx != CMD_lvimgrepadd)
+		&& eap->cmdidx != CMD_vimgrepadd
+		&& eap->cmdidx != CMD_lvimgrepadd)
 					|| qi->qf_curlist == qi->qf_listcount)
 	/* make place for a new list */
 	qf_new_list(qi, title != NULL ? title : *eap->cmdlinep);
@@ -4331,12 +4523,9 @@ ex_vimgrep(exarg_T *eap)
      * ":lcd %:p:h" changes the meaning of short path names. */
     mch_dirname(dirname_start, MAXPATHL);
 
-#ifdef FEAT_AUTOCMD
-     /* Remember the current values of the quickfix list and qf_start, so that
-      * we can check for autocommands changing the current quickfix list. */
+     /* Remember the current quickfix list identifier, so that we can check for
+      * autocommands changing the current quickfix list. */
     save_qfid = qi->qf_lists[qi->qf_curlist].qf_id;
-    cur_qf_start = qi->qf_lists[qi->qf_curlist].qf_start;
-#endif
 
     seconds = (time_t)0;
     for (fi = 0; fi < fcount && !got_int && tomatch > 0; ++fi)
@@ -4347,20 +4536,7 @@ ex_vimgrep(exarg_T *eap)
 	    /* Display the file name every second or so, show the user we are
 	     * working on it. */
 	    seconds = time(NULL);
-	    msg_start();
-	    p = msg_strtrunc(fname, TRUE);
-	    if (p == NULL)
-		msg_outtrans(fname);
-	    else
-	    {
-		msg_outtrans(p);
-		vim_free(p);
-	    }
-	    msg_clr_eos();
-	    msg_didout = FALSE;	    /* overwrite this message */
-	    msg_nowait = TRUE;	    /* don't wait for this message */
-	    msg_col = 0;
-	    out_flush();
+	    vgr_display_fname(fname);
 	}
 
 	buf = buflist_findname_exp(fnames[fi]);
@@ -4371,61 +4547,17 @@ ex_vimgrep(exarg_T *eap)
 	    using_dummy = TRUE;
 	    redraw_for_dummy = TRUE;
 
-#if defined(FEAT_AUTOCMD) && defined(FEAT_SYN_HL)
-	    /* Don't do Filetype autocommands to avoid loading syntax and
-	     * indent scripts, a great speed improvement. */
-	    save_ei = au_event_disable(",Filetype");
-#endif
-	    /* Don't use modelines here, it's useless. */
-	    save_mls = p_mls;
-	    p_mls = 0;
-
-	    /* Load file into a buffer, so that 'fileencoding' is detected,
-	     * autocommands applied, etc. */
-	    buf = load_dummy_buffer(fname, dirname_start, dirname_now);
-
-	    p_mls = save_mls;
-#if defined(FEAT_AUTOCMD) && defined(FEAT_SYN_HL)
-	    au_event_restore(save_ei);
-#endif
+	    buf = vgr_load_dummy_buf(fname, dirname_start, dirname_now);
 	}
 	else
 	    /* Use existing, loaded buffer. */
 	    using_dummy = FALSE;
 
-#ifdef FEAT_AUTOCMD
-	if (loclist_cmd)
-	{
-	    /*
-	     * Verify that the location list is still valid. An autocmd might
-	     * have freed the location list.
-	     */
-	    if (!qflist_valid(curwin, save_qfid))
-	    {
-		EMSG(_(e_loc_list_changed));
-		goto theend;
-	    }
-	}
-	if (cur_qf_start != qi->qf_lists[qi->qf_curlist].qf_start)
-	{
-	    int idx;
-
-	    /* Autocommands changed the quickfix list.  Find the one we were
-	     * using and restore it. */
-	    for (idx = 0; idx < LISTCOUNT; ++idx)
-		if (cur_qf_start == qi->qf_lists[idx].qf_start)
-		{
-		    qi->qf_curlist = idx;
-		    break;
-		}
-	    if (idx == LISTCOUNT)
-	    {
-		/* List cannot be found, create a new one. */
-		qf_new_list(qi, *eap->cmdlinep);
-		cur_qf_start = qi->qf_lists[qi->qf_curlist].qf_start;
-	    }
-	}
-#endif
+	/* Check whether the quickfix list is still valid. When loading a
+	 * buffer above, autocommands might have changed the quickfix list. */
+	if (!vgr_qflist_valid(wp, qi, save_qfid, *eap->cmdlinep))
+	    goto theend;
+	save_qfid = qi->qf_lists[qi->qf_curlist].qf_id;
 
 	if (buf == NULL)
 	{
@@ -4436,54 +4568,8 @@ ex_vimgrep(exarg_T *eap)
 	{
 	    /* Try for a match in all lines of the buffer.
 	     * For ":1vimgrep" look for first match only. */
-	    found_match = FALSE;
-	    for (lnum = 1; lnum <= buf->b_ml.ml_line_count && tomatch > 0;
-								       ++lnum)
-	    {
-		col = 0;
-		while (vim_regexec_multi(&regmatch, curwin, buf, lnum,
-							  col, NULL, NULL) > 0)
-		{
-		    /* Pass the buffer number so that it gets used even for a
-		     * dummy buffer, unless duplicate_name is set, then the
-		     * buffer will be wiped out below. */
-		    if (qf_add_entry(qi,
-				qi->qf_curlist,
-				NULL,       /* dir */
-				fname,
-				duplicate_name ? 0 : buf->b_fnum,
-				ml_get_buf(buf,
-				     regmatch.startpos[0].lnum + lnum, FALSE),
-				regmatch.startpos[0].lnum + lnum,
-				regmatch.startpos[0].col + 1,
-				FALSE,      /* vis_col */
-				NULL,	    /* search pattern */
-				0,	    /* nr */
-				0,	    /* type */
-				TRUE	    /* valid */
-				) == FAIL)
-		    {
-			got_int = TRUE;
-			break;
-		    }
-		    found_match = TRUE;
-		    if (--tomatch == 0)
-			break;
-		    if ((flags & VGR_GLOBAL) == 0
-					       || regmatch.endpos[0].lnum > 0)
-			break;
-		    col = regmatch.endpos[0].col
-					    + (col == regmatch.endpos[0].col);
-		    if (col > (colnr_T)STRLEN(ml_get_buf(buf, lnum, FALSE)))
-			break;
-		}
-		line_breakcheck();
-		if (got_int)
-		    break;
-	    }
-#ifdef FEAT_AUTOCMD
-	    cur_qf_start = qi->qf_lists[qi->qf_curlist].qf_start;
-#endif
+	    found_match = vgr_match_buflines(qi, fname, buf, &regmatch,
+		    tomatch, duplicate_name, flags);
 
 	    if (using_dummy)
 	    {
@@ -4538,7 +4624,7 @@ ex_vimgrep(exarg_T *eap)
 		     * need to be done (again).  But not the window-local
 		     * options! */
 		    aucmd_prepbuf(&aco, buf);
-#if defined(FEAT_AUTOCMD) && defined(FEAT_SYN_HL)
+#if defined(FEAT_SYN_HL)
 		    apply_autocmds(EVENT_FILETYPE, buf->b_p_ft,
 						     buf->b_fname, TRUE, buf);
 #endif
@@ -4558,7 +4644,6 @@ ex_vimgrep(exarg_T *eap)
 
     qf_update_buffer(qi, NULL);
 
-#ifdef FEAT_AUTOCMD
     if (au_name != NULL)
 	apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name,
 					       curbuf->b_fname, TRUE, curbuf);
@@ -4566,33 +4651,15 @@ ex_vimgrep(exarg_T *eap)
      * The QuickFixCmdPost autocmd may free the quickfix list. Check the list
      * is still valid.
      */
-    wp = loclist_cmd ? curwin : NULL;
     if (!qflist_valid(wp, save_qfid))
 	goto theend;
-#endif
 
     /* Jump to first match. */
     if (qi->qf_lists[qi->qf_curlist].qf_count > 0)
     {
 	if ((flags & VGR_NOJUMP) == 0)
-	{
-	    buf = curbuf;
-	    qf_jump(qi, 0, 0, eap->forceit);
-	    if (buf != curbuf)
-		/* If we jumped to another buffer redrawing will already be
-		 * taken care of. */
-		redraw_for_dummy = FALSE;
-
-	    /* Jump to the directory used after loading the buffer. */
-	    if (curbuf == first_match_buf && target_dir != NULL)
-	    {
-		exarg_T ea;
-
-		ea.arg = target_dir;
-		ea.cmdidx = CMD_lcd;
-		ex_cd(&ea);
-	    }
-	}
+	    vgr_jump_to_match(qi, eap->forceit, &redraw_for_dummy,
+		    first_match_buf, target_dir);
     }
     else
 	EMSG2(_(e_nomatch2), s);
@@ -4754,7 +4821,7 @@ wipe_dummy_buffer(buf_T *buf, char_u *dirname_start)
 {
     if (curbuf != buf)		/* safety check */
     {
-#if defined(FEAT_AUTOCMD) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 	cleanup_T   cs;
 
 	/* Reset the error/interrupt/exception state here so that aborting()
@@ -4765,7 +4832,7 @@ wipe_dummy_buffer(buf_T *buf, char_u *dirname_start)
 
 	wipe_buffer(buf, FALSE);
 
-#if defined(FEAT_AUTOCMD) && defined(FEAT_EVAL)
+#if defined(FEAT_EVAL)
 	/* Restore the error/interrupt/exception state if not discarded by a
 	 * new aborting error, interrupt, or uncaught exception. */
 	leave_cleanup(&cs);
@@ -4926,21 +4993,6 @@ qf_get_list_from_lines(dict_T *what, dictitem_T *di, dict_T *retdict)
     }
 
     return status;
-}
-
-/*
- * Return the quickfix/location list number with the given identifier.
- * Returns -1 if list is not found.
- */
-    static int
-qf_id2nr(qf_info_T *qi, int_u qfid)
-{
-    int		qf_idx;
-
-    for (qf_idx = 0; qf_idx < qi->qf_listcount; qf_idx++)
-	if (qi->qf_lists[qf_idx].qf_id == qfid)
-	    return qf_idx;
-    return -1;
 }
 
 /*
@@ -5604,12 +5656,9 @@ ex_cbuffer(exarg_T *eap)
 {
     buf_T	*buf = NULL;
     qf_info_T	*qi = &ql_info;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name = NULL;
-#endif
     int		res;
 
-#ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
 	case CMD_cbuffer:	au_name = (char_u *)"cbuffer"; break;
@@ -5623,12 +5672,11 @@ ex_cbuffer(exarg_T *eap)
     if (au_name != NULL && apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name,
 					       curbuf->b_fname, TRUE, curbuf))
     {
-# ifdef FEAT_EVAL
+#ifdef FEAT_EVAL
 	if (aborting())
 	    return;
-# endif
-    }
 #endif
+    }
 
     /* Must come after autocommands. */
     if (eap->cmdidx == CMD_lbuffer
@@ -5676,11 +5724,9 @@ ex_cbuffer(exarg_T *eap)
 						   qf_title, NULL);
 	    if (res >= 0)
 		qf_list_changed(qi, qi->qf_curlist);
-#ifdef FEAT_AUTOCMD
 	    if (au_name != NULL)
 		apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name,
 						curbuf->b_fname, TRUE, curbuf);
-#endif
 	    if (res > 0 && (eap->cmdidx == CMD_cbuffer ||
 						eap->cmdidx == CMD_lbuffer))
 		qf_jump(qi, 0, 0, eap->forceit);  /* display first error */
@@ -5698,12 +5744,9 @@ ex_cexpr(exarg_T *eap)
 {
     typval_T	*tv;
     qf_info_T	*qi = &ql_info;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name = NULL;
-#endif
     int		res;
 
-#ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
 	case CMD_cexpr:	    au_name = (char_u *)"cexpr"; break;
@@ -5717,12 +5760,11 @@ ex_cexpr(exarg_T *eap)
     if (au_name != NULL && apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name,
 					       curbuf->b_fname, TRUE, curbuf))
     {
-# ifdef FEAT_EVAL
+#ifdef FEAT_EVAL
 	if (aborting())
 	    return;
-# endif
-    }
 #endif
+    }
 
     if (eap->cmdidx == CMD_lexpr
 	    || eap->cmdidx == CMD_lgetexpr
@@ -5748,11 +5790,9 @@ ex_cexpr(exarg_T *eap)
 				 NULL);
 	    if (res >= 0)
 		qf_list_changed(qi, qi->qf_curlist);
-#ifdef FEAT_AUTOCMD
 	    if (au_name != NULL)
 		apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name,
 						curbuf->b_fname, TRUE, curbuf);
-#endif
 	    if (res > 0 && (eap->cmdidx == CMD_cexpr ||
 						eap->cmdidx == CMD_lexpr))
 		qf_jump(qi, 0, 0, eap->forceit);  /* display first error */
@@ -5785,16 +5825,13 @@ ex_helpgrep(exarg_T *eap)
     qf_info_T	*save_qi;
     int		new_qi = FALSE;
     win_T	*wp;
-#ifdef FEAT_AUTOCMD
     char_u	*au_name =  NULL;
-#endif
 
 #ifdef FEAT_MULTI_LANG
     /* Check for a specified language */
     lang = check_help_lang(eap->arg);
 #endif
 
-#ifdef FEAT_AUTOCMD
     switch (eap->cmdidx)
     {
 	case CMD_helpgrep:  au_name = (char_u *)"helpgrep"; break;
@@ -5804,12 +5841,11 @@ ex_helpgrep(exarg_T *eap)
     if (au_name != NULL && apply_autocmds(EVENT_QUICKFIXCMDPRE, au_name,
 					       curbuf->b_fname, TRUE, curbuf))
     {
-# ifdef FEAT_EVAL
+#ifdef FEAT_EVAL
 	if (aborting())
 	    return;
-# endif
-    }
 #endif
+    }
 
     /* Make 'cpoptions' empty, the 'l' flag should not be used here. */
     save_cpo = p_cpo;
@@ -5971,7 +6007,6 @@ ex_helpgrep(exarg_T *eap)
     qf_list_changed(qi, qi->qf_curlist);
     qf_update_buffer(qi, NULL);
 
-#ifdef FEAT_AUTOCMD
     if (au_name != NULL)
     {
 	apply_autocmds(EVENT_QUICKFIXCMDPOST, au_name,
@@ -5980,7 +6015,6 @@ ex_helpgrep(exarg_T *eap)
 	    /* autocommands made "qi" invalid */
 	    return;
     }
-#endif
 
     /* Jump to first match. */
     if (qi->qf_lists[qi->qf_curlist].qf_count > 0)

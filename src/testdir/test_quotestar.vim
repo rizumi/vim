@@ -65,30 +65,29 @@ func Do_test_quotestar_for_x11()
 
   " Takes a short while for the server to be active.
   call WaitFor('serverlist() =~ "' . name . '"')
-  call assert_match(name, serverlist())
 
   " Wait for the server to be up and answering requests.  One second is not
   " always sufficient.
   call WaitFor('remote_expr("' . name . '", "v:version", "", 2) != ""')
 
-  " Clear the *-register of this vim instance.
-  let @* = ''
-
-  " Try to change the *-register of the server.
+  " Clear the *-register of this vim instance and wait for it to be picked up
+  " by the server.
+  let @* = 'no'
   call remote_foreground(name)
+  call WaitFor('remote_expr("' . name . '", "@*", "", 1) == "no"')
+
+  " Set the * register on the server.
   call remote_send(name, ":let @* = 'yes'\<CR>")
   call WaitFor('remote_expr("' . name . '", "@*", "", 1) == "yes"')
-  call assert_equal('yes', remote_expr(name, "@*", "", 2))
 
   " Check that the *-register of this vim instance is changed as expected.
   call WaitFor('@* == "yes"')
-  call assert_equal('yes', @*)
 
   " Handle the large selection over 262040 byte.
   let length = 262044
   let sample = 'a' . repeat('b', length - 2) . 'c'
   let @* = sample
-  call WaitFor('remote_expr("' . name . '", "len(@*) >= ' . length . '", "", 1)', 3000)
+  call WaitFor('remote_expr("' . name . '", "len(@*) >= ' . length . '", "", 1)')
   let res = remote_expr(name, "@*", "", 2)
   call assert_equal(length, len(res))
   " Check length to prevent a large amount of output at assertion failure.

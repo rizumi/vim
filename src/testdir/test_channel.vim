@@ -23,6 +23,21 @@ func s:run_server(testfunc, ...)
   call RunServer('test_channel.py', a:testfunc, a:000)
 endfunc
 
+" Return a list of open files.
+" Can be used to make sure no resources leaked.
+" Returns an empty list on systems where this is not supported.
+func s:get_resources()
+  let pid = getpid()
+
+  if has('mac')
+    return systemlist('lsof -p ' . pid . ' | awk ''$4~/^[0-9]*[rwu]$/&&$5=="REG"{print$NF}''')
+  elseif isdirectory('/proc/' . pid . '/fd/')
+    return systemlist('readlink /proc/' . pid . '/fd/* | grep -v ''^/dev/''')
+  else
+    return []
+  endif
+endfunc
+
 let g:Ch_responseMsg = ''
 func Ch_requestHandler(handle, msg)
   let g:Ch_responseHandle = a:handle
@@ -620,6 +635,7 @@ func Test_nl_write_out_file()
     call assert_equal(['line one', 'line two', 'this', 'AND this'], readfile('Xoutput'))
   finally
     call Stop_g_job()
+    call assert_equal(-1, match(s:get_resources(), '\(^\|/\)Xoutput$'))
     call delete('Xoutput')
   endtry
 endfunc
@@ -663,6 +679,7 @@ func Test_nl_write_both_file()
     call assert_equal(['line one', 'line two', 'this', 'AND this', 'that', 'AND that'], readfile('Xoutput'))
   finally
     call Stop_g_job()
+    call assert_equal(-1, match(s:get_resources(), '\(^\|/\)Xoutput$'))
     call delete('Xoutput')
   endtry
 endfunc
@@ -1126,7 +1143,7 @@ func Test_pipe_to_buffer_raw()
   let job = job_start([s:python, '-c', 
         \ 'import sys; [sys.stdout.write(".") and sys.stdout.flush() for _ in range(10000)]'], options)
   call assert_equal("run", job_status(job))
-  call WaitFor('len(join(getline(1, "$"), "")) >= 10000', 3000)
+  call WaitFor('len(join(getline(1, "$"), "")) >= 10000')
   try
     let totlen = 0
     for line in getline(1, '$')
@@ -1489,7 +1506,7 @@ func Test_exit_callback_interval()
   let g:exit_cb_val = {'start': reltime(), 'end': 0, 'process': 0}
   let job = job_start([s:python, '-c', 'import time;time.sleep(0.5)'], {'exit_cb': 'MyExitTimeCb'})
   let g:exit_cb_val.process = job_info(job).process
-  call WaitFor('type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0', 2000)
+  call WaitFor('type(g:exit_cb_val.end) != v:t_number || g:exit_cb_val.end != 0')
   let elapsed = reltimefloat(g:exit_cb_val.end)
   call assert_true(elapsed > 0.5)
   call assert_true(elapsed < 1.0)
@@ -1662,6 +1679,7 @@ func Test_raw_passes_nul()
   call assert_equal("asdf\nasdf", getline(1))
   call assert_equal("xxx\n", getline(2))
   call assert_equal("\nyyy", getline(3))
+  call assert_equal(-1, match(s:get_resources(), '\(^\|/\)Xtestwrite$'))
 
   call delete('Xtestwrite')
   bwipe!
@@ -1702,10 +1720,12 @@ func Test_env()
 
   let g:envstr = ''
   if has('win32')
-    call job_start(['cmd', '/c', 'echo %FOO%'], {'callback': {ch,msg->execute(":let g:envstr .= msg")}, 'env':{'FOO': 'bar'}})
+    let cmd = ['cmd', '/c', 'echo %FOO%']
   else
-    call job_start([&shell, &shellcmdflag, 'echo $FOO'], {'callback': {ch,msg->execute(":let g:envstr .= msg")}, 'env':{'FOO': 'bar'}})
+    let cmd = [&shell, &shellcmdflag, 'echo $FOO']
   endif
+  call assert_fails('call job_start(cmd, {"env": 1})', 'E475:')
+  call job_start(cmd, {'callback': {ch,msg -> execute(":let g:envstr .= msg")}, 'env': {'FOO': 'bar'}})
   call WaitFor('"" != g:envstr')
   call assert_equal("bar", g:envstr)
   unlet g:envstr
@@ -1719,11 +1739,12 @@ func Test_cwd()
   let g:envstr = ''
   if has('win32')
     let expect = $TEMP
-    let job = job_start(['cmd', '/c', 'echo %CD%'], {'callback': {ch,msg->execute(":let g:envstr .= msg")}, 'cwd': expect})
+    let cmd = ['cmd', '/c', 'echo %CD%']
   else
     let expect = $HOME
-    let job = job_start(['pwd'], {'callback': {ch,msg->execute(":let g:envstr .= msg")}, 'cwd': expect})
+    let cmd = ['pwd']
   endif
+  let job = job_start(cmd, {'callback': {ch,msg -> execute(":let g:envstr .= msg")}, 'cwd': expect})
   try
     call WaitFor('"" != g:envstr')
     let expect = substitute(expect, '[/\\]$', '', '')
@@ -1804,4 +1825,16 @@ func Test_list_args()
   call s:test_list_args('print(''hello\\\\world'')', "hello\\\\world", 1)
   call s:test_list_args('print("hello\"world\"")', 'hello"world"', 1)
   call s:test_list_args('print("hello\tworld")', "hello\tworld", 1)
+endfunc
+
+" Do this last, it stops any channel log.
+func Test_zz_ch_log()
+  call ch_logfile('Xlog', 'w')
+  call ch_log('hello there')
+  call ch_log('%s%s')
+  call ch_logfile('')
+  let text = readfile('Xlog')
+  call assert_match("hello there", text[1])
+  call assert_match("%s%s", text[2])
+  call delete('Xlog')
 endfunc

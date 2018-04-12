@@ -74,7 +74,7 @@
 #undef HAVE_FCNTL_H /* Clash with os_win32.h */
 
 #define PyBytes_FromString      PyString_FromString
-#define PyBytes_Check           PyString_Check
+#define PyBytes_Check		PyString_Check
 #define PyBytes_AsStringAndSize PyString_AsStringAndSize
 
 #if !defined(FEAT_PYTHON) && defined(PROTO)
@@ -672,7 +672,8 @@ end_dynamic_python(void)
 python_runtime_link_init(char *libname, int verbose)
 {
     int i;
-    void *ucs_as_encoded_string;
+    PYTHON_PROC *ucs_as_encoded_string =
+				   (PYTHON_PROC*)&py_PyUnicode_AsEncodedString;
 
 #if !(defined(PY_NO_RTLD_GLOBAL) && defined(PY3_NO_RTLD_GLOBAL)) && defined(UNIX) && defined(FEAT_PYTHON3)
     /* Can't have Python and Python3 loaded at the same time.
@@ -711,14 +712,12 @@ python_runtime_link_init(char *libname, int verbose)
 
     /* Load unicode functions separately as only the ucs2 or the ucs4 functions
      * will be present in the library. */
-    ucs_as_encoded_string = symbol_from_dll(hinstPython,
+    *ucs_as_encoded_string = symbol_from_dll(hinstPython,
 					     "PyUnicodeUCS2_AsEncodedString");
-    if (ucs_as_encoded_string == NULL)
-	ucs_as_encoded_string = symbol_from_dll(hinstPython,
+    if (*ucs_as_encoded_string == NULL)
+	*ucs_as_encoded_string = symbol_from_dll(hinstPython,
 					     "PyUnicodeUCS4_AsEncodedString");
-    if (ucs_as_encoded_string != NULL)
-	py_PyUnicode_AsEncodedString = ucs_as_encoded_string;
-    else
+    if (*ucs_as_encoded_string == NULL)
     {
 	close_dll(hinstPython);
 	hinstPython = 0;
@@ -912,6 +911,8 @@ python_loaded(void)
 }
 #endif
 
+static char *py_home_buf = NULL;
+
     static int
 Python_Init(void)
 {
@@ -929,10 +930,15 @@ Python_Init(void)
 	}
 #endif
 
+	if (*p_pyhome != NUL)
+	{
+	    /* The string must not change later, make a copy in static memory. */
+	    py_home_buf = (char *)vim_strsave(p_pyhome);
+	    if (py_home_buf != NULL)
+		Py_SetPythonHome(py_home_buf);
+	}
 #ifdef PYTHON_HOME
-# ifdef DYNAMIC_PYTHON
-	if (mch_getenv((char_u *)"PYTHONHOME") == NULL)
-# endif
+	else if (mch_getenv((char_u *)"PYTHONHOME") == NULL)
 	    Py_SetPythonHome(PYTHON_HOME);
 #endif
 

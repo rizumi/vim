@@ -899,17 +899,21 @@ valid_yank_reg(
  *
  * If regname is 0 and writing, use register 0
  * If regname is 0 and reading, use previous register
+ *
+ * Return TRUE when the register should be inserted literally (selection or
+ * clipboard).
  */
-    void
+    int
 get_yank_register(int regname, int writing)
 {
     int	    i;
+    int	    ret = FALSE;
 
     y_append = FALSE;
     if ((regname == 0 || regname == '"') && !writing && y_previous != NULL)
     {
 	y_current = y_previous;
-	return;
+	return ret;
     }
     i = regname;
     if (VIM_ISDIGIT(i))
@@ -926,10 +930,16 @@ get_yank_register(int regname, int writing)
 #ifdef FEAT_CLIPBOARD
     /* When selection is not available, use register 0 instead of '*' */
     else if (clip_star.available && regname == '*')
+    {
 	i = STAR_REGISTER;
+	ret = TRUE;
+    }
     /* When clipboard is not available, use register 0 instead of '+' */
     else if (clip_plus.available && regname == '+')
+    {
 	i = PLUS_REGISTER;
+	ret = TRUE;
+    }
 #endif
 #ifdef FEAT_DND
     else if (!writing && regname == '~')
@@ -940,6 +950,7 @@ get_yank_register(int regname, int writing)
     y_current = &(y_regs[i]);
     if (writing)	/* remember the register we write into for do_put() */
 	y_previous = y_current;
+    return ret;
 }
 
 #if defined(FEAT_CLIPBOARD) || defined(PROTO)
@@ -1082,7 +1093,7 @@ do_record(int c)
 
     if (Recording == FALSE)	    /* start recording */
     {
-			/* registers 0-9, a-z and " are allowed */
+	/* registers 0-9, a-z and " are allowed */
 	if (c < 0 || (!ASCII_ISALNUM(c) && c != '"'))
 	    retval = FAIL;
 	else
@@ -1235,8 +1246,7 @@ do_execreg(
 	    EMSG(_(e_nolastcmd));
 	    return FAIL;
 	}
-	vim_free(new_last_cmdline); /* don't keep the cmdline containing @: */
-	new_last_cmdline = NULL;
+	VIM_CLEAR(new_last_cmdline); /* don't keep the cmdline containing @: */
 	/* Escape all control characters with a CTRL-V */
 	p = vim_strsave_escaped_ext(last_cmdline,
 		(char_u *)"\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037", Ctrl_V, FALSE);
@@ -1388,12 +1398,13 @@ put_in_typebuf(
     int
 insert_reg(
     int		regname,
-    int		literally)	/* insert literally, not as if typed */
+    int		literally_arg)	/* insert literally, not as if typed */
 {
     long	i;
     int		retval = OK;
     char_u	*arg;
     int		allocated;
+    int		literally = literally_arg;
 
     /*
      * It is possible to get into an endless loop by having CTRL-R a in
@@ -1424,7 +1435,8 @@ insert_reg(
     }
     else				/* name or number register */
     {
-	get_yank_register(regname, FALSE);
+	if (get_yank_register(regname, FALSE))
+	    literally = TRUE;
 	if (y_current->y_array == NULL)
 	    retval = FAIL;
 	else
@@ -1581,12 +1593,14 @@ get_spec_reg(
     int
 cmdline_paste_reg(
     int regname,
-    int literally,	/* Insert text literally instead of "as typed" */
+    int literally_arg,	/* Insert text literally instead of "as typed" */
     int remcr)		/* don't add CR characters */
 {
     long	i;
+    int		literally = literally_arg;
 
-    get_yank_register(regname, FALSE);
+    if (get_yank_register(regname, FALSE))
+	literally = TRUE;
     if (y_current->y_array == NULL)
 	return FAIL;
 
@@ -1652,7 +1666,7 @@ shift_delete_registers()
     y_regs[1].y_array = NULL;		/* set register one to empty */
 }
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
     static void
 yank_do_autocmd(oparg_T *oap, yankreg_T *reg)
 {
@@ -1669,6 +1683,8 @@ yank_do_autocmd(oparg_T *oap, yankreg_T *reg)
     v_event = get_vim_var_dict(VV_EVENT);
 
     list = list_alloc();
+    if (list == NULL)
+	return;
     for (n = 0; n < reg->y_size; n++)
 	list_append_string(list, reg->y_array[n], -1);
     list->lv_lock = VAR_FIXED;
@@ -1865,7 +1881,7 @@ op_delete(oparg_T *oap)
 	    }
 	}
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
 	if (did_yank && has_textyankpost())
 	    yank_do_autocmd(oap, y_current);
 #endif
@@ -2113,13 +2129,21 @@ op_replace(oparg_T *oap, int c)
     size_t		oldlen;
     struct block_def	bd;
     char_u		*after_p = NULL;
-    int			had_ctrl_v_cr = (c == -1 || c == -2);
+    int			had_ctrl_v_cr = FALSE;
 
     if ((curbuf->b_ml.ml_flags & ML_EMPTY ) || oap->empty)
 	return OK;	    /* nothing to do */
 
-    if (had_ctrl_v_cr)
-	c = (c == -1 ? '\r' : '\n');
+    if (c == REPLACE_CR_NCHAR)
+    {
+	had_ctrl_v_cr = TRUE;
+	c = CAR;
+    }
+    else if (c == REPLACE_NL_NCHAR)
+    {
+	had_ctrl_v_cr = TRUE;
+	c = NL;
+    }
 
 #ifdef FEAT_MBYTE
     if (has_mbyte)
@@ -2207,7 +2231,8 @@ op_replace(oparg_T *oap, int c)
 	    /* insert pre-spaces */
 	    vim_memset(newp + bd.textcol, ' ', (size_t)bd.startspaces);
 	    /* insert replacement chars CHECK FOR ALLOCATED SPACE */
-	    /* -1/-2 is used for entering CR literally. */
+	    /* REPLACE_CR_NCHAR/REPLACE_NL_NCHAR is used for entering CR
+	     * literally. */
 	    if (had_ctrl_v_cr || (c != '\r' && c != '\n'))
 	    {
 #ifdef FEAT_MBYTE
@@ -2677,6 +2702,7 @@ op_insert(oparg_T *oap, long count1)
     if (oap->block_mode)
     {
 	struct block_def	bd2;
+	int			did_indent = FALSE;
 
 	/* If indent kicked in, the firstline might have changed
 	 * but only do that, if the indent actually increased. */
@@ -2685,11 +2711,14 @@ op_insert(oparg_T *oap, long count1)
 	{
 	    bd.textcol += ind_post - ind_pre;
 	    bd.start_vcol += ind_post - ind_pre;
+	    did_indent = TRUE;
 	}
 
 	/* The user may have moved the cursor before inserting something, try
-	 * to adjust the block for that. */
-	if (oap->start.lnum == curbuf->b_op_start_orig.lnum && !bd.is_MAX)
+	 * to adjust the block for that.  But only do it, if the difference
+	 * does not come from indent kicking in. */
+	if (oap->start.lnum == curbuf->b_op_start_orig.lnum
+						  && !bd.is_MAX && !did_indent)
 	{
 	    if (oap->op_type == OP_INSERT
 		    && oap->start.col
@@ -2986,8 +3015,7 @@ free_yank(long n)
 #endif
 	    vim_free(y_current->y_array[i]);
 	}
-	vim_free(y_current->y_array);
-	y_current->y_array = NULL;
+	VIM_CLEAR(y_current->y_array);
 #ifdef AMIGA
 	if (n >= 1000)
 	    MSG("");
@@ -3341,7 +3369,7 @@ op_yank(oparg_T *oap, int deleting, int mess)
 # endif
 #endif
 
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_EVAL)
     if (!deleting && has_textyankpost())
 	yank_do_autocmd(oap, y_current);
 #endif
@@ -3484,11 +3512,9 @@ do_put(
 	    return;
     }
 
-#ifdef FEAT_AUTOCMD
     /* Autocommands may be executed when saving lines for undo, which may make
      * y_array invalid.  Start undo now to avoid that. */
     u_save(curwin->w_cursor.lnum, curwin->w_cursor.lnum + 1);
-#endif
 
     if (insert_string != NULL)
     {
@@ -5954,13 +5980,17 @@ do_addsub(
 	    buf2[i] = '\0';
 	}
 	else if (pre == 0)
-	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llu", n);
+	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llu",
+							(long long unsigned)n);
 	else if (pre == '0')
-	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llo", n);
+	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llo",
+							(long long unsigned)n);
 	else if (pre && hexupper)
-	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llX", n);
+	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llX",
+							(long long unsigned)n);
 	else
-	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llx", n);
+	    vim_snprintf((char *)buf2, NUMBUFLEN, "%llx",
+							(long long unsigned)n);
 	length -= (int)STRLEN(buf2);
 
 	/*
@@ -6031,8 +6061,7 @@ finish_viminfo_registers(void)
 		    vim_free(y_read_regs[i].y_array[j]);
 		vim_free(y_read_regs[i].y_array);
 	    }
-	vim_free(y_read_regs);
-	y_read_regs = NULL;
+	VIM_CLEAR(y_read_regs);
     }
 }
 
@@ -6370,7 +6399,7 @@ write_viminfo_registers(FILE *fp)
 	     * |{bartype},{flags},{name},{type},
 	     *      {linecount},{width},{timestamp},"line1","line2"
 	     * flags: REG_PREVIOUS - register is y_previous
-	     *        REG_EXEC - used for @@
+	     *	      REG_EXEC - used for @@
 	     */
 	    if (y_previous == &y_regs[i])
 		flags |= REG_PREVIOUS;
@@ -7137,8 +7166,7 @@ str_to_reg(
     /* Without any lines make the register empty. */
     if (y_ptr->y_size + newlines == 0)
     {
-	vim_free(y_ptr->y_array);
-	y_ptr->y_array = NULL;
+	VIM_CLEAR(y_ptr->y_array);
 	return;
     }
 
@@ -7481,16 +7509,21 @@ cursor_pos_info(dict_T *dict)
 			    _("Selected %s%ld of %ld Lines; %lld of %lld Words; %lld of %lld Bytes"),
 			    buf1, line_count_selected,
 			    (long)curbuf->b_ml.ml_line_count,
-			    word_count_cursor, word_count,
-			    byte_count_cursor, byte_count);
+			    (long long)word_count_cursor,
+			    (long long)word_count,
+			    (long long)byte_count_cursor,
+			    (long long)byte_count);
 		else
 		    vim_snprintf((char *)IObuff, IOSIZE,
 			    _("Selected %s%ld of %ld Lines; %lld of %lld Words; %lld of %lld Chars; %lld of %lld Bytes"),
 			    buf1, line_count_selected,
 			    (long)curbuf->b_ml.ml_line_count,
-			    word_count_cursor, word_count,
-			    char_count_cursor, char_count,
-			    byte_count_cursor, byte_count);
+			    (long long)word_count_cursor,
+			    (long long)word_count,
+			    (long long)char_count_cursor,
+			    (long long)char_count,
+			    (long long)byte_count_cursor,
+			    (long long)byte_count);
 	    }
 	    else
 	    {
@@ -7508,17 +7541,17 @@ cursor_pos_info(dict_T *dict)
 			(char *)buf1, (char *)buf2,
 			(long)curwin->w_cursor.lnum,
 			(long)curbuf->b_ml.ml_line_count,
-			word_count_cursor, word_count,
-			byte_count_cursor, byte_count);
+			(long long)word_count_cursor, (long long)word_count,
+			(long long)byte_count_cursor, (long long)byte_count);
 		else
 		    vim_snprintf((char *)IObuff, IOSIZE,
 			_("Col %s of %s; Line %ld of %ld; Word %lld of %lld; Char %lld of %lld; Byte %lld of %lld"),
 			(char *)buf1, (char *)buf2,
 			(long)curwin->w_cursor.lnum,
 			(long)curbuf->b_ml.ml_line_count,
-			word_count_cursor, word_count,
-			char_count_cursor, char_count,
-			byte_count_cursor, byte_count);
+			(long long)word_count_cursor, (long long)word_count,
+			(long long)char_count_cursor, (long long)char_count,
+			(long long)byte_count_cursor, (long long)byte_count);
 	    }
 	}
 
@@ -7526,7 +7559,7 @@ cursor_pos_info(dict_T *dict)
 	bom_count = bomb_size();
 	if (bom_count > 0)
 	    vim_snprintf((char *)IObuff + STRLEN(IObuff), IOSIZE,
-					      _("(+%ld for BOM)"), bom_count);
+				   _("(+%lld for BOM)"), (long long)bom_count);
 #endif
 	if (dict == NULL)
 	{

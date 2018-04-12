@@ -34,11 +34,6 @@
 
 #include <limits.h>
 
-/* Python.h defines _POSIX_THREADS itself (if needed) */
-#ifdef _POSIX_THREADS
-# undef _POSIX_THREADS
-#endif
-
 #if defined(_WIN32) && defined(HAVE_FCNTL_H)
 # undef HAVE_FCNTL_H
 #endif
@@ -605,7 +600,10 @@ end_dynamic_python3(void)
 py3_runtime_link_init(char *libname, int verbose)
 {
     int i;
-    void *ucs_from_string, *ucs_decode, *ucs_as_encoded_string;
+    PYTHON_PROC *ucs_from_string = (PYTHON_PROC *)&py3_PyUnicode_FromString;
+    PYTHON_PROC *ucs_decode = (PYTHON_PROC *)&py3_PyUnicode_Decode;
+    PYTHON_PROC *ucs_as_encoded_string =
+				 (PYTHON_PROC *)&py3_PyUnicode_AsEncodedString;
 
 # if !(defined(PY_NO_RTLD_GLOBAL) && defined(PY3_NO_RTLD_GLOBAL)) && defined(UNIX) && defined(FEAT_PYTHON)
     /* Can't have Python and Python3 loaded at the same time.
@@ -646,33 +644,29 @@ py3_runtime_link_init(char *libname, int verbose)
     /* Load unicode functions separately as only the ucs2 or the ucs4 functions
      * will be present in the library. */
 # if PY_VERSION_HEX >= 0x030300f0
-    ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicode_FromString");
-    ucs_decode = symbol_from_dll(hinstPy3, "PyUnicode_Decode");
-    ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+    *ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicode_FromString");
+    *ucs_decode = symbol_from_dll(hinstPy3, "PyUnicode_Decode");
+    *ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 	    "PyUnicode_AsEncodedString");
 # else
-    ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicodeUCS2_FromString");
-    ucs_decode = symbol_from_dll(hinstPy3,
+    *ucs_from_string = symbol_from_dll(hinstPy3, "PyUnicodeUCS2_FromString");
+    *ucs_decode = symbol_from_dll(hinstPy3,
 	    "PyUnicodeUCS2_Decode");
-    ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+    *ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 	    "PyUnicodeUCS2_AsEncodedString");
-    if (!ucs_from_string || !ucs_decode || !ucs_as_encoded_string)
+    if (*ucs_from_string == NULL || *ucs_decode == NULL
+					     || *ucs_as_encoded_string == NULL)
     {
-	ucs_from_string = symbol_from_dll(hinstPy3,
+	*ucs_from_string = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_FromString");
-	ucs_decode = symbol_from_dll(hinstPy3,
+	*ucs_decode = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_Decode");
-	ucs_as_encoded_string = symbol_from_dll(hinstPy3,
+	*ucs_as_encoded_string = symbol_from_dll(hinstPy3,
 		"PyUnicodeUCS4_AsEncodedString");
     }
 # endif
-    if (ucs_from_string && ucs_decode && ucs_as_encoded_string)
-    {
-	py3_PyUnicode_FromString = ucs_from_string;
-	py3_PyUnicode_Decode = ucs_decode;
-	py3_PyUnicode_AsEncodedString = ucs_as_encoded_string;
-    }
-    else
+    if (*ucs_from_string == NULL || *ucs_decode == NULL
+					     || *ucs_as_encoded_string == NULL)
     {
 	close_dll(hinstPy3);
 	hinstPy3 = 0;
@@ -842,6 +836,8 @@ python3_loaded(void)
 }
 #endif
 
+static wchar_t *py_home_buf = NULL;
+
     static int
 Python3_Init(void)
 {
@@ -857,11 +853,18 @@ Python3_Init(void)
 
 	init_structs();
 
+	if (*p_py3home != NUL)
+	{
+	    size_t len = mbstowcs(NULL, (char *)p_py3home, 0) + 1;
 
+	    /* The string must not change later, make a copy in static memory. */
+	    py_home_buf = (wchar_t *)alloc(len * sizeof(wchar_t));
+	    if (py_home_buf != NULL && mbstowcs(
+			    py_home_buf, (char *)p_py3home, len) != (size_t)-1)
+		Py_SetPythonHome(py_home_buf);
+	}
 #ifdef PYTHON3_HOME
-# ifdef DYNAMIC_PYTHON3
-	if (mch_getenv((char_u *)"PYTHONHOME") == NULL)
-# endif
+	else if (mch_getenv((char_u *)"PYTHONHOME") == NULL)
 	    Py_SetPythonHome(PYTHON3_HOME);
 #endif
 

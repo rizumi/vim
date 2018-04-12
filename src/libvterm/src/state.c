@@ -248,8 +248,9 @@ static int on_text(const char bytes[], size_t len, void *user)
 
   VTermPos oldpos = state->pos;
 
-  /* We'll have at most len codepoints */
-  codepoints = vterm_allocator_malloc(state->vt, len * sizeof(uint32_t));
+  /* We'll have at most len codepoints, plus one from a previous incomplete
+   * sequence. */
+  codepoints = vterm_allocator_malloc(state->vt, (len + 1) * sizeof(uint32_t));
 
   encoding =
     state->gsingle_set     ? &state->encoding[state->gsingle_set] :
@@ -267,7 +268,7 @@ static int on_text(const char bytes[], size_t len, void *user)
   if(!npoints)
   {
     vterm_allocator_free(state->vt, codepoints);
-    return 0;
+    return eaten;
   }
 
   if(state->gsingle_set && npoints)
@@ -780,6 +781,10 @@ static void set_dec_mode(VTermState *state, int num, int val)
                         VTERM_PROP_MOUSE_MOVE);
     break;
 
+  case 1004:
+    state->mode.report_focus = val;
+    break;
+
   case 1005:
     state->mouse_protocol = val ? MOUSE_UTF8 : MOUSE_X10;
     break;
@@ -858,6 +863,10 @@ static void request_dec_mode(VTermState *state, int num)
 
     case 1003:
       reply = state->mouse_flags == (MOUSE_WANT_CLICK|MOUSE_WANT_MOVE);
+      break;
+
+    case 1004:
+      reply = state->mode.report_focus;
       break;
 
     case 1005:
@@ -1505,6 +1514,22 @@ static int on_osc(const char *command, size_t cmdlen, void *user)
     settermprop_string(state, VTERM_PROP_TITLE, command + 2, cmdlen - 2);
     return 1;
   }
+  else if(strneq(command, "10;", 3)) {
+    /* request foreground color: <Esc>]10;?<0x07> */
+    int red = state->default_fg.red;
+    int blue = state->default_fg.blue;
+    int green = state->default_fg.green;
+    vterm_push_output_sprintf_ctrl(state->vt, C1_OSC, "10;rgb:%02x%02x/%02x%02x/%02x%02x\x07", red, red, green, green, blue, blue);
+    return 1;
+  }
+  else if(strneq(command, "11;", 3)) {
+    /* request background color: <Esc>]11;?<0x07> */
+    int red = state->default_bg.red;
+    int blue = state->default_bg.blue;
+    int green = state->default_bg.green;
+    vterm_push_output_sprintf_ctrl(state->vt, C1_OSC, "11;rgb:%02x%02x/%02x%02x/%02x%02x\x07", red, red, green, green, blue, blue);
+    return 1;
+  }
   else if(strneq(command, "12;", 3)) {
     settermprop_string(state, VTERM_PROP_CURSORCOLOR, command + 3, cmdlen - 3);
     return 1;
@@ -1711,6 +1736,7 @@ void vterm_state_reset(VTermState *state, int hard)
   state->mode.origin          = 0;
   state->mode.leftrightmargin = 0;
   state->mode.bracketpaste    = 0;
+  state->mode.report_focus    = 0;
 
   state->vt->mode.ctrl8bit   = 0;
 
@@ -1774,6 +1800,14 @@ void vterm_state_reset(VTermState *state, int hard)
 void vterm_state_get_cursorpos(const VTermState *state, VTermPos *cursorpos)
 {
   *cursorpos = state->pos;
+}
+
+void vterm_state_get_mousestate(const VTermState *state, VTermMouseState *mousestate)
+{
+  mousestate->pos.col = state->mouse_col;
+  mousestate->pos.row = state->mouse_row;
+  mousestate->buttons = state->mouse_buttons;
+  mousestate->flags = state->mouse_flags;
 }
 
 void vterm_state_set_callbacks(VTermState *state, const VTermStateCallbacks *callbacks, void *user)
@@ -1857,9 +1891,24 @@ int vterm_state_set_termprop(VTermState *state, VTermProp prop, VTermValue *val)
     if(val->number == VTERM_PROP_MOUSE_MOVE)
       state->mouse_flags |= MOUSE_WANT_MOVE;
     return 1;
+
+  case VTERM_N_PROPS:
+    return 0;
   }
 
   return 0;
+}
+
+void vterm_state_focus_in(VTermState *state)
+{
+  if(state->mode.report_focus)
+    vterm_push_output_sprintf_ctrl(state->vt, C1_CSI, "I");
+}
+
+void vterm_state_focus_out(VTermState *state)
+{
+  if(state->mode.report_focus)
+    vterm_push_output_sprintf_ctrl(state->vt, C1_CSI, "O");
 }
 
 const VTermLineInfo *vterm_state_get_lineinfo(const VTermState *state, int row)

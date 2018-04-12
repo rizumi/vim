@@ -105,13 +105,47 @@ func s:StartDebug(cmd)
   let s:gdbwin = win_getid(winnr())
 
   " Connect gdb to the communication pty, using the GDB/MI interface
-  " If you get an error "undefined command" your GDB is too old.
   call term_sendkeys(s:gdbbuf, 'new-ui mi ' . commpty . "\r")
+
+  " Wait for the response to show up, users may not notice the error and wonder
+  " why the debugger doesn't work.
+  let try_count = 0
+  while 1
+    let response = ''
+    for lnum in range(1,20)
+      if term_getline(s:gdbbuf, lnum) =~ 'new-ui mi '
+	let response = term_getline(s:gdbbuf, lnum + 1)
+	if response =~ 'Undefined command'
+	  echoerr 'Sorry, your gdb is too old, gdb 7.12 is required'
+	  exe 'bwipe! ' . s:ptybuf
+	  exe 'bwipe! ' . s:commbuf
+	  return
+	endif
+	if response =~ 'New UI allocated'
+	  " Success!
+	  break
+	endif
+      endif
+    endfor
+    if response =~ 'New UI allocated'
+      break
+    endif
+    let try_count += 1
+    if try_count > 100
+      echoerr 'Cannot check if your gdb works, continuing anyway'
+      break
+    endif
+    sleep 10m
+  endwhile
 
   " Interpret commands while the target is running.  This should usualy only be
   " exec-interrupt, since many commands don't work properly while the target is
   " running.
   call s:SendCommand('-gdb-set mi-async on')
+
+  " Disable pagination, it causes everything to stop at the gdb
+  " "Type <return> to continue" prompt.
+  call s:SendCommand('-gdb-set pagination off')
 
   " Sign used to highlight the line where the program has stopped.
   " There can be only one.
@@ -201,7 +235,7 @@ endfunc
 " Install commands in the current window to control the debugger.
 func s:InstallCommands()
   command Break call s:SetBreakpoint()
-  command Delete call s:DeleteBreakpoint()
+  command Clear call s:ClearBreakpoint()
   command Step call s:SendCommand('-exec-step')
   command Over call s:SendCommand('-exec-next')
   command Finish call s:SendCommand('-exec-finish')
@@ -212,24 +246,45 @@ func s:InstallCommands()
   command -range -nargs=* Evaluate call s:Evaluate(<range>, <q-args>)
   command Gdb call win_gotoid(s:gdbwin)
   command Program call win_gotoid(s:ptywin)
+  command Source call s:GotoStartwinOrCreateIt()
+  command Winbar call s:InstallWinbar()
 
   " TODO: can the K mapping be restored?
   nnoremap K :Evaluate<CR>
 
   if has('menu') && &mouse != ''
-    nnoremenu WinBar.Step :Step<CR>
-    nnoremenu WinBar.Next :Over<CR>
+    call s:InstallWinbar()
+
+    if !exists('g:termdebug_popup') || g:termdebug_popup != 0
+      let s:saved_mousemodel = &mousemodel
+      let &mousemodel = 'popup_setpos'
+      an 1.200 PopUp.-SEP3-	<Nop>
+      an 1.210 PopUp.Set\ breakpoint	:Break<CR>
+      an 1.220 PopUp.Clear\ breakpoint	:Clear<CR>
+      an 1.230 PopUp.Evaluate		:Evaluate<CR>
+    endif
+  endif
+endfunc
+
+let s:winbar_winids = []
+
+" Install the window toolbar in the current window.
+func s:InstallWinbar()
+  if has('menu') && &mouse != ''
+    nnoremenu WinBar.Step   :Step<CR>
+    nnoremenu WinBar.Next   :Over<CR>
     nnoremenu WinBar.Finish :Finish<CR>
-    nnoremenu WinBar.Cont :Continue<CR>
-    nnoremenu WinBar.Stop :Stop<CR>
-    nnoremenu WinBar.Eval :Evaluate<CR>
+    nnoremenu WinBar.Cont   :Continue<CR>
+    nnoremenu WinBar.Stop   :Stop<CR>
+    nnoremenu WinBar.Eval   :Evaluate<CR>
+    call add(s:winbar_winids, win_getid(winnr()))
   endif
 endfunc
 
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
   delcommand Break
-  delcommand Delete
+  delcommand Clear
   delcommand Step
   delcommand Over
   delcommand Finish
@@ -240,16 +295,34 @@ func s:DeleteCommands()
   delcommand Evaluate
   delcommand Gdb
   delcommand Program
+  delcommand Winbar
 
   nunmap K
 
   if has('menu')
-    aunmenu WinBar.Step
-    aunmenu WinBar.Next
-    aunmenu WinBar.Finish
-    aunmenu WinBar.Cont
-    aunmenu WinBar.Stop
-    aunmenu WinBar.Eval
+    " Remove the WinBar entries from all windows where it was added.
+    let curwinid = win_getid(winnr())
+    for winid in s:winbar_winids
+      if win_gotoid(winid)
+	aunmenu WinBar.Step
+	aunmenu WinBar.Next
+	aunmenu WinBar.Finish
+	aunmenu WinBar.Cont
+	aunmenu WinBar.Stop
+	aunmenu WinBar.Eval
+      endif
+    endfor
+    call win_gotoid(curwinid)
+    let s:winbar_winids = []
+
+    if exists('s:saved_mousemodel')
+      let &mousemodel = s:saved_mousemodel
+      unlet s:saved_mousemodel
+      aunmenu PopUp.-SEP3-
+      aunmenu PopUp.Set\ breakpoint
+      aunmenu PopUp.Clear\ breakpoint
+      aunmenu PopUp.Evaluate
+    endif
   endif
 
   exe 'sign unplace ' . s:pc_id
@@ -278,8 +351,8 @@ func s:SetBreakpoint()
   endif
 endfunc
 
-" :Delete - Delete a breakpoint at the cursor position.
-func s:DeleteBreakpoint()
+" :Clear - Delete a breakpoint at the cursor position.
+func s:ClearBreakpoint()
   let fname = fnameescape(expand('%:p'))
   let lnum = line('.')
   for [key, val] in items(s:breakpoints)
@@ -325,9 +398,11 @@ func s:Evaluate(range, arg)
   else
     let expr = expand('<cexpr>')
   endif
+  let s:ignoreEvalError = 0
   call s:SendEval(expr)
 endfunc
 
+let s:ignoreEvalError = 0
 let s:evalFromBalloonExpr = 0
 
 " Handle the result of data-evaluate-expression
@@ -347,6 +422,7 @@ func s:HandleEvaluate(msg)
 
   if s:evalexpr[0] != '*' && value =~ '^0x' && value != '0x0' && value !~ '"$'
     " Looks like a pointer, also display what it points to.
+    let s:ignoreEvalError = 1
     call s:SendEval('*' . s:evalexpr)
   else
     let s:evalFromBalloonExpr = 0
@@ -359,22 +435,30 @@ func TermDebugBalloonExpr()
   if v:beval_winid != s:startwin
     return
   endif
-  call s:SendEval(v:beval_text)
   let s:evalFromBalloonExpr = 1
   let s:evalFromBalloonExprResult = ''
+  let s:ignoreEvalError = 1
+  call s:SendEval(v:beval_text)
   return ''
 endfunc
 
 " Handle an error.
 func s:HandleError(msg)
-  if a:msg =~ 'No symbol .* in current context'
-	\ || a:msg =~ 'Cannot access memory at address '
-	\ || a:msg =~ 'Attempt to use a type name as an expression'
-	\ || a:msg =~ 'A syntax error in expression,'
+  if s:ignoreEvalError
     " Result of s:SendEval() failed, ignore.
+    let s:ignoreEvalError = 0
+    let s:evalFromBalloonExpr = 0
     return
   endif
   echoerr substitute(a:msg, '.*msg="\(.*\)"', '\1', '')
+endfunc
+
+func s:GotoStartwinOrCreateIt()
+  if !win_gotoid(s:startwin)
+    new
+    let s:startwin = win_getid(winnr())
+    call s:InstallWinbar()
+  endif
 endfunc
 
 " Handle stopping and running message from gdb.
@@ -388,31 +472,32 @@ func s:HandleCursor(msg)
     let s:stopped = 0
   endif
 
-  if win_gotoid(s:startwin)
-    let fname = substitute(a:msg, '.*fullname="\([^"]*\)".*', '\1', '')
-    if a:msg =~ '^\(\*stopped\|=thread-selected\)' && filereadable(fname)
-      let lnum = substitute(a:msg, '.*line="\([^"]*\)".*', '\1', '')
-      if lnum =~ '^[0-9]*$'
-	if expand('%:p') != fnamemodify(fname, ':p')
-	  if &modified
-	    " TODO: find existing window
-	    exe 'split ' . fnameescape(fname)
-	    let s:startwin = win_getid(winnr())
-	  else
-	    exe 'edit ' . fnameescape(fname)
-	  endif
-	endif
-	exe lnum
-	exe 'sign unplace ' . s:pc_id
-	exe 'sign place ' . s:pc_id . ' line=' . lnum . ' name=debugPC file=' . fname
-	setlocal signcolumn=yes
-      endif
-    else
-      exe 'sign unplace ' . s:pc_id
-    endif
+  call s:GotoStartwinOrCreateIt()
 
-    call win_gotoid(wid)
+  let fname = substitute(a:msg, '.*fullname="\([^"]*\)".*', '\1', '')
+  if a:msg =~ '^\(\*stopped\|=thread-selected\)' && filereadable(fname)
+    let lnum = substitute(a:msg, '.*line="\([^"]*\)".*', '\1', '')
+    if lnum =~ '^[0-9]*$'
+      if expand('%:p') != fnamemodify(fname, ':p')
+	if &modified
+	  " TODO: find existing window
+	  exe 'split ' . fnameescape(fname)
+	  let s:startwin = win_getid(winnr())
+	  call s:InstallWinbar()
+	else
+	  exe 'edit ' . fnameescape(fname)
+	endif
+      endif
+      exe lnum
+      exe 'sign unplace ' . s:pc_id
+      exe 'sign place ' . s:pc_id . ' line=' . lnum . ' name=debugPC file=' . fname
+      setlocal signcolumn=yes
+    endif
+  else
+    exe 'sign unplace ' . s:pc_id
   endif
+
+  call win_gotoid(wid)
 endfunc
 
 " Handle setting a breakpoint

@@ -158,6 +158,7 @@ ch_log_lead(const char *what, channel_T *ch)
 
 static int did_log_msg = TRUE;
 
+#ifndef PROTO  /* prototype is in vim.h */
     void
 ch_log(channel_T *ch, const char *fmt, ...)
 {
@@ -174,6 +175,14 @@ ch_log(channel_T *ch, const char *fmt, ...)
 	did_log_msg = TRUE;
     }
 }
+#endif
+
+    static void
+ch_error(channel_T *ch, const char *fmt, ...)
+#ifdef USE_PRINTF_FORMAT_ATTRIBUTE
+    __attribute__((format(printf, 2, 3)))
+#endif
+    ;
 
     static void
 ch_error(channel_T *ch, const char *fmt, ...)
@@ -317,8 +326,8 @@ channel_still_useful(channel_T *channel)
     /* If there is no callback then nobody can get readahead.  If the fd is
      * closed and there is no readahead then the callback won't be called. */
     has_sock_msg = channel->ch_part[PART_SOCK].ch_fd != INVALID_FD
-	          || channel->ch_part[PART_SOCK].ch_head.rq_next != NULL
-		  || channel->ch_part[PART_SOCK].ch_json_head.jq_next != NULL;
+		|| channel->ch_part[PART_SOCK].ch_head.rq_next != NULL
+		|| channel->ch_part[PART_SOCK].ch_json_head.jq_next != NULL;
     has_out_msg = channel->ch_part[PART_OUT].ch_fd != INVALID_FD
 		  || channel->ch_part[PART_OUT].ch_head.rq_next != NULL
 		  || channel->ch_part[PART_OUT].ch_json_head.jq_next != NULL;
@@ -1442,8 +1451,8 @@ channel_write_in(channel_T *channel)
 	ch_close_part(channel, PART_IN);
     }
     else
-	ch_log(channel, "Still %d more lines to write",
-					  buf->b_ml.ml_line_count - lnum + 1);
+	ch_log(channel, "Still %ld more lines to write",
+				   (long)(buf->b_ml.ml_line_count - lnum + 1));
 }
 
 /*
@@ -1536,8 +1545,8 @@ channel_write_new_lines(buf_T *buf)
 	    else if (written > 1)
 		ch_log(channel, "written %d lines to channel", written);
 	    if (lnum < buf->b_ml.ml_line_count)
-		ch_log(channel, "Still %d more lines to write",
-					      buf->b_ml.ml_line_count - lnum);
+		ch_log(channel, "Still %ld more lines to write",
+				       (long)(buf->b_ml.ml_line_count - lnum));
 
 	    in_part->ch_buf_bot = lnum;
 	}
@@ -2081,7 +2090,8 @@ channel_get_json(
 	{
 	    *rettv = item->jq_value;
 	    if (tv->v_type == VAR_NUMBER)
-		ch_log(channel, "Getting JSON message %d", tv->vval.v_number);
+		ch_log(channel, "Getting JSON message %ld",
+						      (long)tv->vval.v_number);
 	    remove_json_node(head, item);
 	    return OK;
 	}
@@ -2207,14 +2217,7 @@ channel_exe_cmd(channel_T *channel, ch_part_T part, typval_T *argv)
 	ex_redraw(&ea);
 	showruler(FALSE);
 	setcursor();
-	out_flush();
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	{
-	    gui_update_cursor(TRUE, FALSE);
-	    gui_mch_flush();
-	}
-#endif
+	out_flush_cursor(TRUE, FALSE);
     }
     else if (STRCMP(cmd, "expr") == 0 || STRCMP(cmd, "call") == 0)
     {
@@ -2985,8 +2988,7 @@ channel_clear_one(channel_T *channel, ch_part_T part)
 channel_clear(channel_T *channel)
 {
     ch_log(channel, "Clearing channel");
-    vim_free(channel->ch_hostname);
-    channel->ch_hostname = NULL;
+    VIM_CLEAR(channel->ch_hostname);
     channel_clear_one(channel, PART_SOCK);
     channel_clear_one(channel, PART_OUT);
     channel_clear_one(channel, PART_ERR);
@@ -4158,8 +4160,9 @@ channel_select_check(int ret_in, void *rfds_in, void *wfds_in)
 	if (ret > 0 && in_part->ch_fd != INVALID_FD
 					    && FD_ISSET(in_part->ch_fd, wfds))
 	{
-	    channel_write_input(channel);
+	    /* Clear the flag first, ch_fd may change in channel_write_input(). */
 	    FD_CLR(in_part->ch_fd, wfds);
+	    channel_write_input(channel);
 	    --ret;
 	}
     }
@@ -4466,7 +4469,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 	return OK;
     if (tv->v_type != VAR_DICT)
     {
-	EMSG(_(e_invarg));
+	EMSG(_(e_dictreq));
 	return FAIL;
     }
     dict = tv->vval.v_dict;
@@ -4549,7 +4552,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_io_buf[part] = get_tv_number(item);
 		if (opt->jo_io_buf[part] <= 0)
 		{
-		    EMSG2(_(e_invarg2), get_tv_string(item));
+		    EMSG3(_(e_invargNval), hi->hi_key, get_tv_string(item));
 		    return FAIL;
 		}
 		if (buflist_findnr(opt->jo_io_buf[part]) == NULL)
@@ -4598,7 +4601,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		*lp = get_tv_number(item);
 		if (*lp < 0)
 		{
-		    EMSG2(_(e_invarg2), get_tv_string(item));
+		    EMSG3(_(e_invargNval), hi->hi_key, get_tv_string(item));
 		    return FAIL;
 		}
 	    }
@@ -4609,7 +4612,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_set |= JO_CHANNEL;
 		if (item->v_type != VAR_CHANNEL)
 		{
-		    EMSG2(_(e_invarg2), "channel");
+		    EMSG2(_(e_invargval), "channel");
 		    return FAIL;
 		}
 		opt->jo_channel = item->vval.v_channel;
@@ -4622,7 +4625,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_callback = get_callback(item, &opt->jo_partial);
 		if (opt->jo_callback == NULL)
 		{
-		    EMSG2(_(e_invarg2), "callback");
+		    EMSG2(_(e_invargval), "callback");
 		    return FAIL;
 		}
 	    }
@@ -4634,7 +4637,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_out_cb = get_callback(item, &opt->jo_out_partial);
 		if (opt->jo_out_cb == NULL)
 		{
-		    EMSG2(_(e_invarg2), "out_cb");
+		    EMSG2(_(e_invargval), "out_cb");
 		    return FAIL;
 		}
 	    }
@@ -4646,7 +4649,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_err_cb = get_callback(item, &opt->jo_err_partial);
 		if (opt->jo_err_cb == NULL)
 		{
-		    EMSG2(_(e_invarg2), "err_cb");
+		    EMSG2(_(e_invargval), "err_cb");
 		    return FAIL;
 		}
 	    }
@@ -4658,7 +4661,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_close_cb = get_callback(item, &opt->jo_close_partial);
 		if (opt->jo_close_cb == NULL)
 		{
-		    EMSG2(_(e_invarg2), "close_cb");
+		    EMSG2(_(e_invargval), "close_cb");
 		    return FAIL;
 		}
 	    }
@@ -4671,7 +4674,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		    never = TRUE;
 		else if (STRCMP(val, "auto") != 0)
 		{
-		    EMSG2(_(e_invarg2), "drop");
+		    EMSG3(_(e_invargNval), "drop", val);
 		    return FAIL;
 		}
 		opt->jo_drop_never = never;
@@ -4684,7 +4687,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_exit_cb = get_callback(item, &opt->jo_exit_partial);
 		if (opt->jo_exit_cb == NULL)
 		{
-		    EMSG2(_(e_invarg2), "exit_cb");
+		    EMSG2(_(e_invargval), "exit_cb");
 		    return FAIL;
 		}
 	    }
@@ -4697,7 +4700,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_term_name = get_tv_string_chk(item);
 		if (opt->jo_term_name == NULL)
 		{
-		    EMSG2(_(e_invarg2), "term_name");
+		    EMSG2(_(e_invargval), "term_name");
 		    return FAIL;
 		}
 	    }
@@ -4708,7 +4711,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		val = get_tv_string(item);
 		if (STRCMP(val, "open") != 0 && STRCMP(val, "close") != 0)
 		{
-		    EMSG2(_(e_invarg2), val);
+		    EMSG3(_(e_invargNval), "term_finish", val);
 		    return FAIL;
 		}
 		opt->jo_set2 |= JO2_TERM_FINISH;
@@ -4732,7 +4735,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		}
 		if (p == NULL)
 		{
-		    EMSG2(_(e_invarg2), "term_opencmd");
+		    EMSG2(_(e_invargval), "term_opencmd");
 		    return FAIL;
 		}
 	    }
@@ -4746,7 +4749,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		p = opt->jo_eof_chars = get_tv_string_chk(item);
 		if (p == NULL)
 		{
-		    EMSG2(_(e_invarg2), "term_opencmd");
+		    EMSG2(_(e_invargval), "eof_chars");
 		    return FAIL;
 		}
 	    }
@@ -4754,45 +4757,109 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 	    {
 		if (!(supported2 & JO2_TERM_ROWS))
 		    break;
-		opt->jo_set |= JO2_TERM_ROWS;
+		opt->jo_set2 |= JO2_TERM_ROWS;
 		opt->jo_term_rows = get_tv_number(item);
 	    }
 	    else if (STRCMP(hi->hi_key, "term_cols") == 0)
 	    {
 		if (!(supported2 & JO2_TERM_COLS))
 		    break;
-		opt->jo_set |= JO2_TERM_COLS;
+		opt->jo_set2 |= JO2_TERM_COLS;
 		opt->jo_term_cols = get_tv_number(item);
 	    }
 	    else if (STRCMP(hi->hi_key, "vertical") == 0)
 	    {
 		if (!(supported2 & JO2_VERTICAL))
 		    break;
-		opt->jo_set |= JO2_VERTICAL;
+		opt->jo_set2 |= JO2_VERTICAL;
 		opt->jo_vertical = get_tv_number(item);
 	    }
 	    else if (STRCMP(hi->hi_key, "curwin") == 0)
 	    {
 		if (!(supported2 & JO2_CURWIN))
 		    break;
-		opt->jo_set |= JO2_CURWIN;
+		opt->jo_set2 |= JO2_CURWIN;
 		opt->jo_curwin = get_tv_number(item);
 	    }
 	    else if (STRCMP(hi->hi_key, "hidden") == 0)
 	    {
 		if (!(supported2 & JO2_HIDDEN))
 		    break;
-		opt->jo_set |= JO2_HIDDEN;
+		opt->jo_set2 |= JO2_HIDDEN;
 		opt->jo_hidden = get_tv_number(item);
 	    }
+	    else if (STRCMP(hi->hi_key, "norestore") == 0)
+	    {
+		if (!(supported2 & JO2_NORESTORE))
+		    break;
+		opt->jo_set2 |= JO2_NORESTORE;
+		opt->jo_term_norestore = get_tv_number(item);
+	    }
+	    else if (STRCMP(hi->hi_key, "term_kill") == 0)
+	    {
+		if (!(supported2 & JO2_TERM_KILL))
+		    break;
+		opt->jo_set2 |= JO2_TERM_KILL;
+		opt->jo_term_kill = get_tv_string_chk(item);
+	    }
+# if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
+	    else if (STRCMP(hi->hi_key, "ansi_colors") == 0)
+	    {
+		int 		n = 0;
+		listitem_T	*li;
+		long_u		rgb[16];
+
+		if (!(supported2 & JO2_ANSI_COLORS))
+		    break;
+
+		if (item == NULL || item->v_type != VAR_LIST
+			|| item->vval.v_list == NULL)
+		{
+		    EMSG2(_(e_invargval), "ansi_colors");
+		    return FAIL;
+		}
+
+		li = item->vval.v_list->lv_first;
+		for (; li != NULL && n < 16; li = li->li_next, n++)
+		{
+		    char_u	*color_name;
+		    guicolor_T 	guicolor;
+
+		    color_name = get_tv_string_chk(&li->li_tv);
+		    if (color_name == NULL)
+			return FAIL;
+
+		    guicolor = GUI_GET_COLOR(color_name);
+		    if (guicolor == INVALCOLOR)
+			return FAIL;
+
+		    rgb[n] = GUI_MCH_GET_RGB(guicolor);
+		}
+
+		if (n != 16 || li != NULL)
+		{
+		    EMSG2(_(e_invargval), "ansi_colors");
+		    return FAIL;
+		}
+
+		opt->jo_set2 |= JO2_ANSI_COLORS;
+		memcpy(opt->jo_ansi_colors, rgb, sizeof(rgb));
+	    }
+# endif
 #endif
 	    else if (STRCMP(hi->hi_key, "env") == 0)
 	    {
 		if (!(supported2 & JO2_ENV))
 		    break;
-		opt->jo_set |= JO2_ENV;
+		if (item->v_type != VAR_DICT)
+		{
+		    EMSG2(_(e_invargval), "env");
+		    return FAIL;
+		}
+		opt->jo_set2 |= JO2_ENV;
 		opt->jo_env = item->vval.v_dict;
-		++item->vval.v_dict->dv_refcount;
+		if (opt->jo_env != NULL)
+		    ++opt->jo_env->dv_refcount;
 	    }
 	    else if (STRCMP(hi->hi_key, "cwd") == 0)
 	    {
@@ -4801,10 +4868,10 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		opt->jo_cwd = get_tv_string_buf_chk(item, opt->jo_cwd_buf);
 		if (opt->jo_cwd == NULL || !mch_isdir(opt->jo_cwd))
 		{
-		    EMSG2(_(e_invarg2), "cwd");
+		    EMSG2(_(e_invargval), "cwd");
 		    return FAIL;
 		}
-		opt->jo_set |= JO2_CWD;
+		opt->jo_set2 |= JO2_CWD;
 	    }
 	    else if (STRCMP(hi->hi_key, "waittime") == 0)
 	    {
@@ -4846,7 +4913,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 		    opt->jo_part = PART_OUT;
 		else
 		{
-		    EMSG2(_(e_invarg2), val);
+		    EMSG3(_(e_invargNval), "part", val);
 		    return FAIL;
 		}
 	    }
@@ -4866,7 +4933,7 @@ get_job_options(typval_T *tv, jobopt_T *opt, int supported, int supported2)
 							     opt->jo_soe_buf);
 		if (opt->jo_stoponexit == NULL)
 		{
-		    EMSG2(_(e_invarg2), "stoponexit");
+		    EMSG2(_(e_invargval), "stoponexit");
 		    return FAIL;
 		}
 	    }
@@ -5377,11 +5444,13 @@ job_check_ended(void)
 
 /*
  * Create a job and return it.  Implements job_start().
+ * "argv_arg" is only for Unix.
+ * When "argv_arg" is NULL then "argvars" is used.
  * The returned job has a refcount of one.
  * Returns NULL when out of memory.
  */
     job_T *
-job_start(typval_T *argvars, jobopt_T *opt_arg)
+job_start(typval_T *argvars, char **argv_arg, jobopt_T *opt_arg)
 {
     job_T	*job;
     char_u	*cmd = NULL;
@@ -5468,6 +5537,13 @@ job_start(typval_T *argvars, jobopt_T *opt_arg)
 
     job_set_options(job, &opt);
 
+#ifdef USE_ARGV
+    if (argv_arg != NULL)
+    {
+	argv = argv_arg;
+    }
+    else
+#endif
     if (argvars[0].v_type == VAR_STRING)
     {
 	/* Command is a string. */
@@ -5478,6 +5554,7 @@ job_start(typval_T *argvars, jobopt_T *opt_arg)
 	    goto theend;
 	}
 #ifdef USE_ARGV
+	/* This will modify "cmd". */
 	if (mch_parse_cmd(cmd, FALSE, &argv, &argc) == FAIL)
 	    goto theend;
 	argv[argc] = NULL;
@@ -5544,7 +5621,8 @@ job_start(typval_T *argvars, jobopt_T *opt_arg)
 
 theend:
 #ifdef USE_ARGV
-    vim_free(argv);
+    if (argv != argv_arg)
+	vim_free(argv);
 #else
     vim_free(ga.ga_data);
 #endif

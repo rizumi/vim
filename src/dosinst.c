@@ -23,7 +23,14 @@
 #define GVIMEXT32_PATH	    "GvimExt32\\gvimext.dll"
 
 /* Macro to do an error check I was typing over and over */
-#define CHECK_REG_ERROR(code) if (code != ERROR_SUCCESS) { printf("%ld error number:  %ld\n", (long)__LINE__, (long)code); return 1; }
+#define CHECK_REG_ERROR(code) \
+    do { \
+	if (code != ERROR_SUCCESS) \
+	{ \
+	    printf("%ld error number:  %ld\n", (long)__LINE__, (long)code); \
+	    return 1; \
+	} \
+    } while (0)
 
 int	has_vim = 0;		/* installable vim.exe exists */
 int	has_gvim = 0;		/* installable gvim.exe exists */
@@ -1200,8 +1207,8 @@ install_vimrc(int idx)
 
 	/* If the path has a space:  When using cmd.exe (Win NT/2000/XP) put
 	 * quotes around the diff command and rely on the default value of
-         * shellxquote to solve the quoting problem for the whole command.
-         *
+	 * shellxquote to solve the quoting problem for the whole command.
+	 *
 	 * Otherwise put a double quote just before the space and at the
 	 * end of the command.  Putting quotes around the whole thing
 	 * doesn't work on Win 95/98/ME.  This is mostly guessed! */

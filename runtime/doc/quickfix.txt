@@ -1,4 +1,4 @@
-*quickfix.txt*  For Vim version 8.0.  Last change: 2017 Dec 13
+*quickfix.txt*  For Vim version 8.0.  Last change: 2018 Mar 29
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -330,9 +330,9 @@ deleted for some reason, the message "line changed" is shown to warn you that
 the error location may not be correct.  If you quit Vim and start again the
 marks are lost and the error locations may not be correct anymore.
 
-If vim is built with |+autocmd| support, two autocommands are available for
-running commands before and after a quickfix command (':make', ':grep' and so
-on) is executed. See |QuickFixCmdPre| and |QuickFixCmdPost| for details.
+Two autocommands are available for running commands before and after a
+quickfix command (':make', ':grep' and so on) is executed. See
+|QuickFixCmdPre| and |QuickFixCmdPost| for details.
 
 						*QuickFixCmdPost-example*
 When 'encoding' differs from the locale, the error messages may have a
@@ -419,8 +419,7 @@ EXECUTE A COMMAND IN ALL THE BUFFERS IN QUICKFIX OR LOCATION LIST:
 			autocommand event is disabled by adding it to
 			'eventignore'.  This considerably speeds up editing
 			each buffer.
-			{not in Vi} {not available when compiled without the
-			|+listcmds| feature}
+			{not in Vi}
 			Also see |:bufdo|, |:tabdo|, |:argdo|, |:windo|,
 			|:ldo|, |:cfdo| and |:lfdo|.
 
@@ -433,8 +432,7 @@ EXECUTE A COMMAND IN ALL THE BUFFERS IN QUICKFIX OR LOCATION LIST:
 				:{cmd}
 				etc.
 <			Otherwise it works the same as `:cdo`.
-			{not in Vi} {not available when compiled without the
-			|+listcmds| feature}
+			{not in Vi}
 
 							*:ldo*
 :ld[o][!] {cmd}		Execute {cmd} in each valid entry in the location list
@@ -447,8 +445,7 @@ EXECUTE A COMMAND IN ALL THE BUFFERS IN QUICKFIX OR LOCATION LIST:
 				etc.
 <			Only valid entries in the location list are used.
 			Otherwise it works the same as `:cdo`.
-			{not in Vi} {not available when compiled without the
-			|+listcmds| feature}
+			{not in Vi}
 
 							*:lfdo*
 :lfdo[!] {cmd}		Execute {cmd} in each file in the location list for
@@ -460,8 +457,7 @@ EXECUTE A COMMAND IN ALL THE BUFFERS IN QUICKFIX OR LOCATION LIST:
 				:{cmd}
 				etc.
 <			Otherwise it works the same as `:ldo`.
-			{not in Vi} {not available when compiled without the
-			|+listcmds| feature}
+			{not in Vi}
 
 =============================================================================
 2. The error window					*quickfix-window*
@@ -657,8 +653,8 @@ To get the number of the current list in the stack: >
 4. Using :make						*:make_makeprg*
 
 							*:mak* *:make*
-:mak[e][!] [arguments]	1. If vim was built with |+autocmd|, all relevant
-			   |QuickFixCmdPre| autocommands are executed.
+:mak[e][!] [arguments]	1. All relevant |QuickFixCmdPre| autocommands are
+			   executed.
 			2. If the 'autowrite' option is on, write any changed
 			   buffers
 			3. An errorfile name is made from 'makeef'.  If
@@ -670,9 +666,8 @@ To get the number of the current list in the stack: >
 			   errorfile (for Unix it is also echoed on the
 			   screen).
 			5. The errorfile is read using 'errorformat'.
-			6. If vim was built with |+autocmd|, all relevant
-			   |QuickFixCmdPost| autocommands are executed.
-			   See example below.
+			6. All relevant |QuickFixCmdPost| autocommands are
+			   executed.  See example below.
 			7. If [!] is not given the first error is jumped to.
 			8. The errorfile is deleted.
 			9. You can now move through the errors with commands
